@@ -4,8 +4,6 @@ B站 AI Bot 插件 for [AstrBot](https://github.com/AstrBotDevs/AstrBot) — 让
 
 内部模块正在采用渐进式统一事件与动作框架。现有功能与配置会继续兼容，不进行一次性重写。
 
-维护安排：[2026-10-21 维护任务书](docs/maintenance-plan-2026-10-21.md)（13 项待办、实施要求与验收标准；不代表已实现）。
-
 ## ✨ 功能
 
 ### 💬 评论与互动
@@ -61,11 +59,18 @@ Bot 可在聊天中通过自然语言触发以下能力，工具结果回到 LLM
 - **B站搜索** — `search_bilibili` 搜视频、用户、UP 详情、关注更新与直播，用户说“我想看猫咪”就能推荐视频
 - **看视频** — 去看一个视频、AI 分析内容、评分、存入记忆，看完可链式点赞 / 投币 / 收藏 / 评论
 - **私信分享给主人** — `watch_and_share_video_private` 会先看完并写入视频记忆，再把B站原生视频卡片发给 `OWNER_MID`；默认关闭
-- **互动操作** — `bili_action` 统一执行点赞 / 投币 / 收藏 / 关注 / 评论，需用户同意后执行
+- **互动操作** — `bili_action` 统一执行点赞 / 投币 / 收藏 / 关注 / 评论，需显式开启写工具，并由 QQ 私聊中的 AstrBot 管理员确认
 - **番剧能力** — `bili_bangumi` 统一搜索、详情、观看、新番时间线、排行与追番更新
-- **B站拉黑** — 主人确认后拉黑指定 UID 的用户（v1.1.31 新增）
+- **B站拉黑** — 管理员确认后拉黑指定 UID 的用户；确认只绑定当次工具和参数（v1.1.31 新增）
 
 默认仅注册 8 个职责清晰的工具；开启私信分享开关时注册 9 个，减少工具说明占用和模型选错入口的概率。
+
+#### 工具权限与写确认
+
+- `ENABLE_LLM_TOOLS` 默认关闭。开启后，每次实际工具执行仍会读取真实 AstrBot 事件中的平台、发送者、会话与管理员身份；身份或会话缺失时默认拒绝，不信任工具参数、模型文本或记忆里的身份声明。
+- 工具按公开读取、私密读取和写操作分级。`bili_recall`、关注更新/开播、追番更新等私密读取还需开启 `SECURITY_ENABLE_PRIVATE_READ_TOOLS`；点赞、投币、收藏、关注、评论、拉黑、主动浏览和私信分享等写操作还需开启 `SECURITY_ENABLE_WRITE_TOOLS`。两个安全开关都默认关闭。
+- 写工具只对 QQ 私聊中的 AstrBot 管理员开放，QQ 群聊不开放。首次调用会返回写操作摘要；管理员在同一会话回复「确认」后，再以**相同工具和参数**发起调用才会执行，参数改变需重新确认，回复「取消」可放弃。模型自己生成“确认”不构成授权。
+- 工具开关只决定是否允许调用，不会创建自动任务；视频解析、私信分享等功能仍受各自独立开关约束。
 
 ### 🛠️ 运维与安全
 
@@ -78,6 +83,7 @@ Bot 可在聊天中通过自然语言触发以下能力，工具结果回到 LLM
 - **隔离扩展 Host** — 可选插件通过安全 Page Schema 接入内置 WebUI；扩展缺失或异常时原功能不受影响，详见 [Extension API v1](docs/extension-api-v1.md)
 - **LLM 熔断保护** — 单次调用不叠加重试；全局连续 5 次失败后默认冷却 2 分钟，恢复时仅放行一次探测，避免重复申请
 - **基础防注入** — 对可疑 prompt 注入内容做检测、记录和安全包裹
+- **写结果保护** — 评论、私信、动态及互动请求超时或中断时保留“发送结果未知”，不把它当失败盲目重试；拉黑、解黑和危险私信处理也区分真实成功、失败与结果未知
 - **Cookie 自动刷新** — 定期检查 + 自动刷新，支持扫码登录
 - **拉黑管理** — 手动 / 自动拉黑，黑名单用户不调 LLM 不花钱
 - **恶意告警** — B站评论区有人攻击 Bot 时，用人设口吻通过 QQ 私信通知主人，主人可直接回复决定是否拉黑（v1.1.31 新增）
@@ -87,7 +93,7 @@ Bot 可在聊天中通过自然语言触发以下能力，工具结果回到 LLM
 
 跨平台共享默认关闭，只允许绑定到 `OWNER_MID` 的主人身份在显式开启安全共享后使用：
 
-1. 在 QQ 发送 `/bili绑定 <B站UID>` 完成绑定
+1. 管理员在 QQ 发送 `/bili绑定 <OWNER_MID>` 完成主人绑定；绑定主人 UID 需要管理员权限，普通绑定/解绑仍可自助
 1. 将 `MEMORY_ISOLATION_MODE` 设为 `safe_share` 并开启 `ENABLE_SAFE_CROSS_PLATFORM_MEMORY`
 1. QQ 对话只会收到经过脱敏、限长和类型过滤的B站侧近期摘要；插件不会反向保存 QQ 聊天记录
 
@@ -219,11 +225,15 @@ git clone https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
 |`WEB_SEARCH_API_KEY`         |可选|搜索后端 API Key                                                         |
 |`WEB_SEARCH_API_BASE`        |可选|Firecrawl / Grok / custom 可填写自建服务或兼容代理；留空使用官方地址                       |
 |`WEB_SEARCH_MODEL`           |可选|Grok 默认 `grok-4.6`，Perplexity 默认 `sonar`；custom 按接口填写                    |
+|`ENABLE_LLM_TOOLS`           |可选|启用 QQ/AstrBot 聊天中的 B站 LLM 工具；默认关闭，实际调用仍按真实事件授权                 |
+|`SECURITY_ENABLE_PRIVATE_READ_TOOLS`|可选|允许账号私密读取工具；默认关闭，仍需受信通道中的管理员身份                    |
+|`SECURITY_ENABLE_WRITE_TOOLS`|可选|允许 B站写工具；默认关闭，仍需 QQ 私聊管理员确认并以相同参数再次调用                 |
 |`ENABLE_PRIVATE_MESSAGES`    |可选|启用B站新私信监听；首次开启跳过历史，默认关闭，可用 `/bili开关 私信` 单独切换|
 |`PRIVATE_MESSAGE_POLL_INTERVAL`|可选|收到新私信后的活跃期轮询间隔，默认且最短60秒|
 |`PRIVATE_MESSAGE_IDLE_POLL_INTERVAL`|可选|空闲期轮询间隔，默认180秒，且不会短于活跃期|
 |`PRIVATE_MESSAGE_ACTIVE_WINDOW`|可选|收到新私信后保持活跃轮询的时间，默认600秒；遇到 -509 后从10分钟倍增退避，恢复时逐级缩短|
 |`PRIVATE_MESSAGE_REPLY_SCOPE`|可选|`owner` 只回复主人 / `whitelist` 主人和白名单 / `all` 全部安全用户；默认 `owner`|
+|`PRIVATE_MESSAGE_AUTO_REPLY`|可选|自动回复允许范围内的安全私信；默认关闭，可用 `/bili开关 私信回复` 单独切换|
 |`PRIVATE_MESSAGE_AUTO_WATCH_VIDEO`|可选|收到允许回复用户的视频分享卡片后，先分析、写入视频记忆，再根据真实内容回复；默认开启|
 |`PRIVATE_MESSAGE_BILI_SEARCH_ENABLED`|可选|允许回复模型按需在后台搜索/推荐视频、查询UP主资料和最近投稿；查询时最多回复两条，默认开启|
 |`PRIVATE_MESSAGE_BILI_SEARCH_LIMIT`|可选|私信站内查询最多返回几条结果，范围1-5，默认5|
@@ -253,7 +263,7 @@ git clone https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
 |`RECOMMEND_OWNER_DELIVERY`   |可选|推荐发送方式：`private_message`（B站私信文字+链接）/ `comment` / `both` / `off`|
 |`RECOMMEND_OWNER_MIN_SCORE`  |可选|Bot 自己的观后评分达到此值且想分享时才推荐，默认 8；不要求与主人的爱好相同|
 |`RECOMMEND_OWNER_DAILY_LIMIT`|可选|每天最多推荐次数，默认 1；`0` 表示不限制|
-|`ENABLE_DYNAMIC`             |可选|启用自动发动态                                                              |
+|`ENABLE_DYNAMIC`             |可选|启用自动发动态；默认关闭，需管理员显式开启                                     |
 |`DYNAMIC_TIMES_COUNT`        |可选|每天触发几次动态发布                                                           |
 |`DYNAMIC_DAILY_COUNT`        |可选|每天最多发几条动态                                                            |
 |`ENABLE_WEB_PANEL`           |可选|启用 Web 管理面板                                                          |
@@ -280,6 +290,8 @@ git clone https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
 > 💡 恶意告警功能需要同时配置 `ABUSE_ALERT_MODE` 和 `ABUSE_ALERT_QQ_UMO`。UMO 可从 AstrBot 日志或读空气插件的 UMO 注册表获取。告警时 Bot 会用人设口吻私信主人并询问是否拉黑，主人直接回复即可。
 
 ## 🎮 命令
+
+普通用户可使用 `/bili分区`、`/bili解析`、`/bili绑定`、`/bili解绑` 和 `/bili帮助`；表中其他管理、内部状态和写操作命令需要 AstrBot 管理员权限。绑定主人 UID 也必须由管理员执行。LLM 写工具另受上述安全开关与私聊确认约束。
 
 |命令             |说明                     |
 |---------------|-----------------------|

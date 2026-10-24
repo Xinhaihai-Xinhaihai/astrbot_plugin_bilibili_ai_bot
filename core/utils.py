@@ -8,6 +8,7 @@ import time
 import asyncio
 import aiohttp
 from .network import plugin_http_session
+from .runtime import WriteResultUnknownError
 from astrbot.api import logger
 from .config import DATA_DIR, TEMP_IMAGE_DIR, TEMP_VIDEO_DIR, USER_AGENT
 try:
@@ -159,7 +160,8 @@ class UtilsMixin:
                 raise
         raise last_err
 
-    async def _http_post(self, url, headers=None, data=None, timeout=10, retries=2):
+    async def _http_post(self, url, headers=None, data=None, timeout=10, retries=0):
+        """POST once by default; an ambiguous transport result must not be retried."""
         last_err = None
         for i in range(retries + 1):
             try:
@@ -170,14 +172,31 @@ class UtilsMixin:
                         data=data,
                         timeout=aiohttp.ClientTimeout(total=timeout),
                     ) as r:
-                        return await r.json(content_type=None), r
-            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionResetError) as e:
+                        payload = await r.json(content_type=None)
+                        if not isinstance(payload, dict):
+                            raise WriteResultUnknownError(
+                                f"POST response was not an object ({type(payload).__name__})"
+                            )
+                        if type(payload.get("code")) is not int:
+                            raise WriteResultUnknownError("POST response has no valid result code")
+                        return payload, r
+            except WriteResultUnknownError:
+                raise
+            except (ValueError, UnicodeError) as e:
+                raise WriteResultUnknownError(
+                    f"POST response could not be decoded ({type(e).__name__})"
+                ) from e
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 last_err = e
                 if i < retries:
                     await asyncio.sleep(0.5 * (i + 1))
                     continue
-                raise
-        raise last_err
+                raise WriteResultUnknownError(
+                    f"POST result unknown after {type(e).__name__}"
+                ) from e
+        raise WriteResultUnknownError(
+            f"POST result unknown after {type(last_err).__name__}"
+        ) from last_err
 
     async def _http_get_text(self, url, headers=None, params=None, timeout=10, retries=2):
         last_err = None

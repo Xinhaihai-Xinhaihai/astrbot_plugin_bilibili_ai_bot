@@ -953,49 +953,60 @@ class WeeklySummaryMixin:
             if not umo:
                 umo = (self.config.get("ABUSE_ALERT_QQ_UMO", "") or "").strip()
             if umo:
+                # 先完整构建消息，再只发送一次。发送异常可能已经投递，不能再退回文本重发。
+                has_qq_image = False
                 try:
                     from astrbot.api.event import MessageChain
                     chain = MessageChain().message("📅 本周B站生活周报")
                     if image_path:
-                        chain = self._append_image_to_chain(chain, image_path) or MessageChain().message(summary)
+                        image_chain = self._append_image_to_chain(chain, image_path)
+                        if image_chain is not None:
+                            chain = image_chain
+                            has_qq_image = True
+                        else:
+                            chain = MessageChain().message(summary)
                     else:
                         chain = MessageChain().message(summary)
+                except Exception as exc:
+                    logger.warning(f"[BiliBot] 周总结QQ图片消息构建失败，尚未发送，改用文本: {exc}")
+                    chain = MessageChain().message(summary)
+                try:
                     await self.context.send_message(umo, chain)
-                    results.append("QQ私信图片" if image_path else "QQ私信")
+                except Exception as exc:
+                    results.append("QQ私信结果未知")
+                    logger.warning(f"[BiliBot] 周总结QQ私信结果未知，不自动重发: {exc}")
+                else:
+                    results.append("QQ私信图片" if has_qq_image else "QQ私信")
                     logger.info("[BiliBot] 📅 周总结已通过QQ私信发送")
-                except Exception as e:
-                    logger.warning(f"[BiliBot] 周总结QQ图片发送失败，尝试退回文本: {e}")
-                    try:
-                        from astrbot.api.event import MessageChain
-                        await self.context.send_message(umo, MessageChain().message(summary))
-                        results.append("QQ私信文本")
-                    except Exception as e2:
-                        logger.warning(f"[BiliBot] 周总结QQ文本发送失败: {e2}")
             else:
                 logger.warning("[BiliBot] 周总结模式包含qq但未配置UMO（周总结/恶意告警的UMO都为空）")
 
         if mode in ("dynamic", "both"):
             try:
-                success = False
                 has_image = False
                 dynamic_text = summary
+                outcome = None
+                image_state = {"sent": False}
                 if image_path:
                     img_info = await self._upload_image_to_bilibili(image_path)
                     if img_info:
                         dynamic_text = "📅 这周的B站生活周报来啦，整理成图片存档一下。"
-                        image_state = {"sent": False}
                         outcome = await self._queue_dynamic_post(
                             dynamic_text,
                             lambda: self._post_dynamic_with_image(dynamic_text, img_info, image_state),
                             with_outcome=True,
                         )
-                        success = outcome.success
-                        has_image = bool(outcome.success and image_state.get("sent"))
-                if not success:
-                    success = await self._queue_dynamic_post(
-                        summary, lambda: self._post_dynamic_text(summary)
+                # 只有尚未发起动态写请求时才可改发纯文字。失败/未知都不能再换 key 重发。
+                if outcome is None:
+                    outcome = await self._queue_dynamic_post(
+                        summary, lambda: self._post_dynamic_text(summary), with_outcome=True
                     )
-                if success:
+                success = outcome.success
+                has_image = bool(success and image_state.get("sent"))
+                if outcome.state == "unknown":
+                    results.append("B站动态结果未知")
+                    logger.warning("[BiliBot] 周总结动态结果未知，不自动改发纯文字")
+                elif success:
                     results.append("B站动态图片" if has_image else "B站动态")
                     log = self._load_json(DYNAMIC_LOG_FILE, [])
                     log.append({
@@ -1005,6 +1016,8 @@ class WeeklySummaryMixin:
                     })
                     self._save_json(DYNAMIC_LOG_FILE, log[-100:])
                     logger.info("[BiliBot] 📅 周总结已发布为B站动态")
+                else:
+                    logger.warning("[BiliBot] 周总结动态被明确拒绝，未继续重发")
             except Exception as e:
                 logger.warning(f"[BiliBot] 周总结动态发布失败: {e}")
 
@@ -1059,17 +1072,18 @@ class WeeklySummaryMixin:
                     await self.context.send_message(umo, chain)
                     results.append("QQ私信图片" if image_path else "QQ私信")
                 except Exception as exc:
-                    logger.warning(f"[BiliBot] 日总结QQ投递失败: {exc}")
+                    results.append("QQ私信结果未知")
+                    logger.warning(f"[BiliBot] 日总结QQ投递结果未知，不自动重发: {exc}")
         if mode in ("dynamic", "both"):
             try:
-                success = False
                 has_image = False
                 dynamic_text = summary
+                outcome = None
+                image_state = {"sent": False}
                 if image_path:
                     image_info = await self._upload_image_to_bilibili(image_path)
                     if image_info:
                         dynamic_text = "今天的B站生活小结，留个轻量存档。"
-                        image_state = {"sent": False}
                         outcome = await self._queue_dynamic_post(
                             dynamic_text,
                             lambda: self._post_dynamic_with_image(
@@ -1077,13 +1091,16 @@ class WeeklySummaryMixin:
                             ),
                             with_outcome=True,
                         )
-                        success = outcome.success
-                        has_image = bool(outcome.success and image_state.get("sent"))
-                if not success:
-                    success = await self._queue_dynamic_post(
-                        summary, lambda: self._post_dynamic_text(summary)
+                if outcome is None:
+                    outcome = await self._queue_dynamic_post(
+                        summary, lambda: self._post_dynamic_text(summary), with_outcome=True
                     )
-                if success:
+                success = outcome.success
+                has_image = bool(success and image_state.get("sent"))
+                if outcome.state == "unknown":
+                    results.append("B站动态结果未知")
+                    logger.warning("[BiliBot] 日总结动态结果未知，不自动改发纯文字")
+                elif success:
                     results.append("B站动态图片" if has_image else "B站动态")
                     log = self._load_json(DYNAMIC_LOG_FILE, [])
                     log.append({
@@ -1094,6 +1111,8 @@ class WeeklySummaryMixin:
                         "image_path": image_path if has_image else "",
                     })
                     self._save_json(DYNAMIC_LOG_FILE, log[-100:])
+                else:
+                    logger.warning("[BiliBot] 日总结动态被明确拒绝，未继续重发")
             except Exception as exc:
                 logger.warning(f"[BiliBot] 日总结动态投递失败: {exc}")
         return results

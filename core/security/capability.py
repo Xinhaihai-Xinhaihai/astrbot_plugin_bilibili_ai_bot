@@ -59,16 +59,8 @@ class CapabilityError(Exception):
 
 
 def _stable_args(args: dict[str, Any]) -> str:
-    """参数标准化：排序 + 去除空值 + 限长，保证同一意图得到同一摘要。"""
-    cleaned: dict[str, Any] = {}
-    for key in sorted(args or {}):
-        value = args[key]
-        if value is None or value == "":
-            continue
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        cleaned[str(key)] = str(value)[:200]
-    return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
+    """Hash complete JSON arguments, including types; only the display may truncate."""
+    return json.dumps(args or {}, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
 def args_hash(args: dict[str, Any]) -> str:

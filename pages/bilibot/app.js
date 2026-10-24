@@ -126,6 +126,7 @@ const PAGE_KEYS = {
   ],
   security: [
     "BILI_TOOL_ISOLATION_ENABLED", "BILI_ALLOW_SEARCH_TOOLS", "BILI_TOOL_ALLOWLIST", "ENABLE_LLM_TOOLS",
+    "SECURITY_ENABLE_PRIVATE_READ_TOOLS", "SECURITY_ENABLE_WRITE_TOOLS",
     "BILI_PROMPT_INJECTION_DEFENSE", "BILI_TOOL_AUDIT_ENABLED", "MEMORY_ISOLATION_MODE",
     "ENABLE_SAFE_CROSS_PLATFORM_MEMORY", "ENABLE_PRIVACY_REDACTION", "MEMORY_BLOCKED_PREFIXES",
     "MEMORY_BLOCKED_KEYWORDS", "CROSS_PLATFORM_MEMORY_PROMPT", "PRIVATE_MESSAGE_AUTO_BLOCK",
@@ -162,9 +163,9 @@ const MOCK_FIELDS = {
   FILTER_DUPLICATE_MESSAGES: ["【回复筛选】过滤近期完全重复的消息", "bool", true],
   FILTER_AD_MESSAGES: ["【回复筛选】过滤广告、引流和联系方式轰炸", "bool", true],
   INTEREST_APPLY_TO_PRIVATE: ["【回复筛选】私信也使用兴趣选择", "bool", true],
-  ENABLE_PRIVATE_MESSAGES: ["【B站私信·总开关】监听新私信", "bool", true],
+  ENABLE_PRIVATE_MESSAGES: ["【B站私信·总开关】监听新私信", "bool", false],
   PRIVATE_MESSAGE_REPLY_SCOPE: ["【B站私信·回复】允许自动回复哪些人", "string", "all", ["all", "owner", "whitelist"]],
-  PRIVATE_MESSAGE_AUTO_REPLY: ["【B站私信·回复】自动回复安全私信", "bool", true],
+  PRIVATE_MESSAGE_AUTO_REPLY: ["【B站私信·回复】自动回复安全私信", "bool", false],
   CUSTOM_PRIVATE_MESSAGE_INSTRUCTION: ["【B站私信·回复】私信回复补充提示词", "text", "避免处理不明确的敏感请求。"],
   ENABLE_LIVE_DANMAKU_REPLY: ["【直播互动·总开关】进入指定直播间参与弹幕互动", "bool", false],
   LIVE_DANMAKU_MAX_PER_MINUTE: ["【直播互动】每分钟最多发送弹幕次数", "int", 3],
@@ -220,7 +221,7 @@ const MOCK_FIELDS = {
   PROACTIVE_COMMENT_MIN_SCORE: ["【主动行为】评论最低评分", "int", 7],
   PROACTIVE_FOLLOW: ["【主动行为】允许主动关注 UP 主", "bool", true],
   PROACTIVE_FOLLOW_MIN_SCORE: ["【主动行为】关注最低评分", "int", 9],
-  ENABLE_DYNAMIC: ["【动态发布】启用主动发布动态", "bool", true],
+  ENABLE_DYNAMIC: ["【动态发布】启用主动发布动态", "bool", false],
   DYNAMIC_TIMES_COUNT: ["【动态发布】每天计划触发次数", "int", 1],
   DYNAMIC_TOPICS: ["【动态发布】常用主题", "list", ["动画", "音乐", "今天看到的趣事"]],
   CUSTOM_DYNAMIC_INSTRUCTION: ["【动态发布】动态补充提示词", "text", "像真实用户一样分享，不要固定模板。"],
@@ -278,7 +279,9 @@ const MOCK_FIELDS = {
   LLM_CIRCUIT_COOLDOWN_SECONDS: ["【模型可靠性】熔断冷却时间（秒）", "int", 120],
   USE_ASTRBOT_PERSONA: ["【人设】使用 AstrBot 自带人设", "bool", true],
   CUSTOM_SYSTEM_PROMPT: ["【人设】自定义系统提示词", "text", ""],
-  ENABLE_LLM_TOOLS: ["【功能开关】启用 LLM 工具", "bool", true],
+  ENABLE_LLM_TOOLS: ["【功能开关】启用 LLM 工具", "bool", false],
+  SECURITY_ENABLE_PRIVATE_READ_TOOLS: ["【安全与工具】允许账号私密读取工具", "bool", false],
+  SECURITY_ENABLE_WRITE_TOOLS: ["【安全与工具】允许 B站写操作工具", "bool", false],
   ENABLE_PERSONALITY_EVOLUTION: ["【实验性】启用旧版每日性格演化", "bool", false],
   EVOLVE_HOUR: ["【性格演化】触发时间（0-23点）", "int", 1],
   EMBED_MODEL: ["【高级·记忆】Embedding 模型名称", "string", "text-embedding-3-small"],
@@ -1898,7 +1901,7 @@ function renderSecurity() {
       ${metricCard("工具拒绝", fmt(securityCount(["bili_tool_denied"])), "未授权请求未执行", "lock", "violet")}
       ${metricCard("记忆策略", memoryMode === "safe_share" ? "安全共享" : "平台隔离", "仅向主人侧开放脱敏摘要", "memory-card", "orange")}
     </section>
-    ${renderConfigSection("工具隔离总控", "高风险工具不会因为关闭前端开关而自动获得权限；关闭 LLM 工具会拒绝全部 B站查询、看视频与搜索调用", ["BILI_TOOL_ISOLATION_ENABLED", "ENABLE_LLM_TOOLS", "BILI_ALLOW_SEARCH_TOOLS", "BILI_PROMPT_INJECTION_DEFENSE", "BILI_TOOL_AUDIT_ENABLED"], "shield")}
+    ${renderConfigSection("工具隔离总控", "高风险工具不会因为关闭前端开关而自动获得权限；关闭 LLM 工具会拒绝全部 B站查询、看视频与搜索调用", ["BILI_TOOL_ISOLATION_ENABLED", "ENABLE_LLM_TOOLS", "SECURITY_ENABLE_PRIVATE_READ_TOOLS", "SECURITY_ENABLE_WRITE_TOOLS", "BILI_ALLOW_SEARCH_TOOLS", "BILI_PROMPT_INJECTION_DEFENSE", "BILI_TOOL_AUDIT_ENABLED"], "shield")}
     <section class="card section-card tool-access-card">${sectionHead("B站端私信回复工具", "仅供B站私信收到消息后的回复模型按需查询公开信息；与 QQ/AstrBot 聊天工具分开，不会自动执行", "controller")}${renderToolSummary()}</section>
     <div class="two-column">
       ${renderConfigSection("记忆隔离与安全共享", "默认隔离；开启共享后也只向已绑定主人侧提供脱敏摘要", ["MEMORY_ISOLATION_MODE", "ENABLE_SAFE_CROSS_PLATFORM_MEMORY", "ENABLE_PRIVACY_REDACTION", "MEMORY_BLOCKED_PREFIXES", "MEMORY_BLOCKED_KEYWORDS", "CROSS_PLATFORM_MEMORY_PROMPT"], "memory-card")}

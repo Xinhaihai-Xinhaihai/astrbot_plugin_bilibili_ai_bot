@@ -6,6 +6,7 @@ import hashlib
 import uuid
 import aiohttp
 from .network import plugin_http_session
+from .runtime import WriteResultUnknownError
 from functools import reduce
 from astrbot.api import logger
 from .config import (
@@ -269,6 +270,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 回复失败: {d.get('message', d['code'])}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.error(f"[BiliBot] 回复出错: {e}")
             return False
@@ -298,6 +302,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 发评论失败({oid}): code={code} {d.get('message', '')}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.error(f"[BiliBot] 发送评论异常: {e}")
             return False
@@ -359,6 +366,9 @@ class BilibiliAPIMixin:
                 f"code={code} {result.get('message', '')}"
             )
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 发送B站{label}异常({receiver_mid}): {e}")
             return False
@@ -532,6 +542,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 点赞失败({aid}): code={code} {d.get('message', '')}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 点赞异常({aid}): {e}")
             return False
@@ -549,6 +562,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 投币失败({aid}): code={code} {d.get('message', '')}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 投币异常({aid}): {e}")
             return False
@@ -571,6 +587,9 @@ class BilibiliAPIMixin:
                 return True
             logger.warning(f"[BiliBot] 收藏失败({aid}): code={code} {d2.get('message', '')}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 收藏异常({aid}): {e}")
             return False
@@ -588,6 +607,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 关注失败({mid}): code={code} {d.get('message', '')}")
             return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 关注异常({mid}): {e}")
             return False
@@ -633,6 +655,9 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 动态发送失败: {result}")
                 return False
+        except WriteResultUnknownError:
+            # 请求可能已经到达B站；交给统一运行时记录 unknown，禁止自动重试。
+            raise
         except Exception as e:
             logger.error(f"[BiliBot] 动态发送异常: {e}")
             return False
@@ -644,18 +669,26 @@ class BilibiliAPIMixin:
             headers = {**self._headers(), "Content-Type": "application/json"}
             async with plugin_http_session(self.config) as s:
                 async with s.post(BILI_DYNAMIC_IMAGE_URL, params=params, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as r:
-                    result = await r.json()
-            if result.get("code") == 0:
-                if isinstance(image_state, dict):
-                    image_state["sent"] = True
-                logger.info("[BiliBot] ✅ 带图动态发送成功")
-                return True
-            else:
-                logger.warning(f"[BiliBot] 带图动态失败: {result}，尝试纯文字...")
-                return await self._post_dynamic_text(text)
-        except Exception as e:
-            logger.error(f"[BiliBot] 带图动态异常: {e}，尝试纯文字...")
-            return await self._post_dynamic_text(text)
+                    result = await r.json(content_type=None)
+        except Exception as exc:
+            logger.error("[BiliBot] 带图动态请求结果未知，不自动降级或重发")
+            raise WriteResultUnknownError(
+                f"image dynamic result unknown after {type(exc).__name__}"
+            ) from exc
+        if not isinstance(result, dict):
+            logger.error("[BiliBot] 带图动态响应格式异常，结果未知，不自动降级或重发")
+            raise WriteResultUnknownError("image dynamic response was not an object")
+        if type(result.get("code")) is not int:
+            raise WriteResultUnknownError("image dynamic response has no valid result code")
+        if result.get("code") == 0:
+            if isinstance(image_state, dict):
+                image_state["sent"] = True
+            logger.info("[BiliBot] ✅ 带图动态发送成功")
+            return True
+
+        # 只有服务器明确拒绝时才允许降级；网络/解析异常绝不能文字重发。
+        logger.warning(f"[BiliBot] 带图动态被服务器明确拒绝: {result}，尝试纯文字...")
+        return await self._post_dynamic_text(text)
 
     # ── UP主最新视频 ──
     async def _get_up_latest_video(self, mid):

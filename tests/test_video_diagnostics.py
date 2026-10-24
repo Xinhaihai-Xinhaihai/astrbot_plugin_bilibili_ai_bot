@@ -135,8 +135,14 @@ class VideoDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         async def download(_):
             set_call_diagnostic(reason="HTTP 403")
             return None
-        bot = types.SimpleNamespace(config={"VIDEO_VISION_PROVIDER_ID": "vision"},
-            _get_video_vision_client=lambda: None, _detect_video_format=lambda _: "none", _download_video=download)
+        bot = types.SimpleNamespace(
+            config={"VIDEO_VISION_PROVIDER_ID": "vision"},
+            _get_video_vision_client=lambda: None,
+            _detect_video_format=lambda _: "none",
+            _video_direct_key=lambda *_: "vision:none",
+            _video_vision_dead_reason=lambda _: None,
+            _download_video=download,
+        )
         info = {"bvid": "BVtest"}
         await VideoMixin._analyze_video_media(bot, info)
         self.assertEqual(info["_media_diagnostics"][0]["reason"], "HTTP 403")
