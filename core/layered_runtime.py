@@ -271,11 +271,12 @@ class LayeredRuntime:
             return None
         tier = base.tier
         if name == "search_bilibili":
-            search_type = str(kwargs.get("search_type", "video") or "video").lower()
+            search_type = str(kwargs.get("search_type", "video") or "video").strip().lower()
             if search_type in {"following_updates", "following_live"}:
                 tier = Tier.PRIVATE_READ
         elif name == "bili_bangumi":
-            action = str(kwargs.get("action", "") or "").lower()
+            # Match the composite tool's execution normalization before classifying.
+            action = str(kwargs.get("action", "") or "").strip().lower()
             if action == "updates":
                 tier = Tier.PRIVATE_READ
             elif action == "watch":

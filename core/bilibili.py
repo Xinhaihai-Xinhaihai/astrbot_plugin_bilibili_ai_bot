@@ -678,6 +678,8 @@ class BilibiliAPIMixin:
         if not isinstance(result, dict):
             logger.error("[BiliBot] 带图动态响应格式异常，结果未知，不自动降级或重发")
             raise WriteResultUnknownError("image dynamic response was not an object")
+        if type(result.get("code")) is not int:
+            raise WriteResultUnknownError("image dynamic response has no valid result code")
         if result.get("code") == 0:
             if isinstance(image_state, dict):
                 image_state["sent"] = True

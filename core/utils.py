@@ -177,6 +177,8 @@ class UtilsMixin:
                             raise WriteResultUnknownError(
                                 f"POST response was not an object ({type(payload).__name__})"
                             )
+                        if type(payload.get("code")) is not int:
+                            raise WriteResultUnknownError("POST response has no valid result code")
                         return payload, r
             except WriteResultUnknownError:
                 raise
