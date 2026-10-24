@@ -4,6 +4,7 @@ import random
 from datetime import datetime
 from astrbot.api import logger
 from .security import readable_scopes
+from .runtime import WriteResultUnknownError
 from .config import (
     AFFECTION_FILE, BLOCK_KEYWORDS, INJECTION_PATTERNS,
     LEVEL_NAMES, MILESTONE_FILE, MOOD_FILE, SECURITY_LOG_FILE,
@@ -106,6 +107,8 @@ class AffectionMixin:
                 retries=0,
             )
             return d["code"] == 0
+        except WriteResultUnknownError:
+            raise
         except Exception:
             return False
 

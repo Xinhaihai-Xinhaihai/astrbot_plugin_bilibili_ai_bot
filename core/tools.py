@@ -44,6 +44,18 @@ def create_tools(plugin):
     def short_digest(value):
         return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
 
+    @staticmethod
+    def write_outcome_text(outcome, success_text, failure_text, action_name):
+        """Never turn an ambiguous remote write into a retryable 'failed' result."""
+        if outcome.success:
+            return success_text
+        if outcome.state == "unknown":
+            return (
+                f"⚠️ {action_name}结果未知：请求可能已经到达B站。"
+                "请勿自动重试，先人工核查远端状态。"
+            )
+        return failure_text
+
     # ── 记忆类工具 ──
 
     @dataclass
@@ -460,6 +472,12 @@ def create_tools(plugin):
                     ),
                 )
                 if not share_outcome.success:
+                    if share_outcome.state == "unknown":
+                        return (
+                            f"{result['message']}\n\n"
+                            "⚠️ 视频已看完并写入记忆，但 B站原生视频卡片发送结果未知；"
+                            "请求可能已经送达，请勿自动重试，先人工核查私信。"
+                        )
                     return (
                         f"{result['message']}\n\n"
                         "⚠️ 视频已看完并写入记忆，但 B站原生视频卡片发送失败；请检查 Cookie、CSRF、接收 UID 和风控日志。"
@@ -501,7 +519,9 @@ def create_tools(plugin):
                     oid,
                     lambda: plugin._send_comment(int(oid), comment_text),
                 )
-                return f"评论成功：{comment_text}" if outcome.success else "评论发送失败。"
+                return write_outcome_text(
+                    outcome, f"评论成功：{comment_text}", "评论发送失败。", "评论发送"
+                )
             except Exception as e:
                 return f"评论出错：{e}"
 
@@ -528,7 +548,7 @@ def create_tools(plugin):
                 oid,
                 lambda: plugin._like_video(int(oid)),
             )
-            return "点赞成功。" if outcome.success else "点赞失败。"
+            return write_outcome_text(outcome, "点赞成功。", "点赞失败。", "点赞")
 
     @dataclass
     class CoinVideoTool(FunctionTool[AstrAgentContext]):
@@ -559,7 +579,9 @@ def create_tools(plugin):
                 oid,
                 lambda: plugin._coin_video(int(oid), num=num),
             )
-            return f"投了{num}个币。" if outcome.success else "投币失败。"
+            return write_outcome_text(
+                outcome, f"投了{num}个币。", "投币失败。", "投币"
+            )
 
     @dataclass
     class FavVideoTool(FunctionTool[AstrAgentContext]):
@@ -584,7 +606,7 @@ def create_tools(plugin):
                 oid,
                 lambda: plugin._fav_video(int(oid)),
             )
-            return "收藏成功。" if outcome.success else "收藏失败。"
+            return write_outcome_text(outcome, "收藏成功。", "收藏失败。", "收藏")
 
     @dataclass
     class FollowUpTool(FunctionTool[AstrAgentContext]):
@@ -612,7 +634,9 @@ def create_tools(plugin):
                 mid,
                 lambda: plugin._follow_user(int(mid)),
             )
-            return f"已关注UP主(UID:{mid})。" if outcome.success else "关注失败。"
+            return write_outcome_text(
+                outcome, f"已关注UP主(UID:{mid})。", "关注失败。", "关注"
+            )
 
     @dataclass
     class CheckFollowingUpdatesTool(FunctionTool[AstrAgentContext]):
@@ -820,11 +844,11 @@ def create_tools(plugin):
             uid = str(kwargs.get("uid", "")).strip()
             reason = kwargs.get("reason", "恶意评论") or "恶意评论"
             if not uid or not uid.isdigit():
-                return ToolExecResult(is_success=False, description="UID 无效，请提供纯数字的B站UID。")
+                return "UID 无效，请提供纯数字的B站UID。"
 
             # 检查是否是主人
             if plugin._is_owner(uid):
-                return ToolExecResult(is_success=False, description="不能拉黑主人！")
+                return "不能拉黑主人！"
 
             import os, json
             from datetime import datetime as dt
@@ -852,16 +876,15 @@ def create_tools(plugin):
 
             if api_ok:
                 logger.info(f"[BiliBot] 🚫 工具拉黑 UID:{uid}（{reason}）")
-                return ToolExecResult(
-                    is_success=True,
-                    description=f"已拉黑 UID:{uid}，B站API调用成功。",
+                return f"已拉黑 UID:{uid}，B站API调用成功。"
+            if block_outcome.state == "unknown":
+                logger.warning(f"[BiliBot] ⚠️ 工具拉黑 UID:{uid} B站API结果未知，已加本地黑名单")
+                return (
+                    f"⚠️ UID:{uid} 已加入本地黑名单，但B站API拉黑结果未知；"
+                    "请求可能已经生效，请勿自动重试，先人工核查远端状态。"
                 )
-            else:
-                logger.warning(f"[BiliBot] ⚠️ 工具拉黑 UID:{uid} B站API失败，已加本地黑名单")
-                return ToolExecResult(
-                    is_success=True,
-                    description=f"UID:{uid} 已加入本地黑名单，但B站API调用失败（可能需要重新登录）。",
-                )
+            logger.warning(f"[BiliBot] ⚠️ 工具拉黑 UID:{uid} B站API失败，已加本地黑名单")
+            return f"UID:{uid} 已加入本地黑名单，但B站API调用失败（可能需要重新登录）。"
 
     # ── 精简后的组合工具 ──
 
@@ -1022,14 +1045,38 @@ def create_tools(plugin):
                 )
             return "不支持的番剧操作。"
 
-    # ── 一键开关守卫：ENABLE_LLM_TOOLS=False 时所有工具直接返回提示 ──
+    # ── 实际执行守卫：开关、可信身份、分层授权与一次性写确认 ──
 
     def _guard_tool(tool):
         original_call = tool.call
+        if tool.name in {
+            "bili_action",
+            "bili_block_user",
+            "bili_watch_videos",
+            "watch_and_share_video_private",
+            "bili_bangumi",
+        }:
+            tool.description = (
+                f"{tool.description} Write subactions require admin confirmation; "
+                "after the user's exact '确认' reply, repeat the call with identical arguments."
+            )
 
         async def guarded_call(context, **kwargs):
-            if not plugin.config.get("ENABLE_LLM_TOOLS", True):
+            if not plugin.config.get("ENABLE_LLM_TOOLS", False):
                 return "⚠️ LLM工具已关闭，管理员可用 /bili开关 工具 开启。"
+            runtime = getattr(plugin, "layered_runtime", None)
+            if runtime is None:
+                return "⚠️ 安全授权层未启动，工具调用已拒绝。"
+            try:
+                decision = await runtime.authorize_tool_call(
+                    tool.name, context, dict(kwargs)
+                )
+            except Exception:
+                return "⚠️ 授权校验失败，工具调用已拒绝。"
+            if not decision.allowed:
+                if decision.reason.startswith("请确认以下写操作"):
+                    return decision.reason
+                return f"⚠️ {decision.reason}"
             return await original_call(context, **kwargs)
 
         tool.call = guarded_call

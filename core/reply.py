@@ -561,6 +561,11 @@ class ReplyMixin(CommentContextMixin):
                         )
                         if block_outcome.success:
                             logger.info(f"[BiliBot] 🚫 拉黑 {username}")
+                        elif block_outcome.state == "unknown":
+                            logger.warning(
+                                f"[BiliBot] {username}({mid}) 的B站拉黑结果未知，"
+                                "已停止回复并保留本地隔离，禁止自动重试"
+                            )
                         else:
                             logger.warning(
                                 f"[BiliBot] 拉黑动作未确认成功：{username}({mid})"

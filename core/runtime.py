@@ -44,6 +44,10 @@ class ActionState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class WriteResultUnknownError(RuntimeError):
+    """A write may have reached the server, so retrying is not automatically safe."""
+
+
 @dataclass(frozen=True)
 class InboundEvent:
     """与平台 SDK 解耦的最小入站事件。"""
@@ -606,7 +610,7 @@ class EventRuntime:
             reason = "send_state_unknown:worker_cancelled"
             await self._finish_action(request, ActionState.UNKNOWN, None, reason)
             raise
-        except (asyncio.TimeoutError, TimeoutError) as exc:
+        except (WriteResultUnknownError, asyncio.TimeoutError, TimeoutError) as exc:
             reason = f"send_state_unknown:{exc or 'timeout'}"
             await self._finish_action(request, ActionState.UNKNOWN, None, reason)
             return ActionOutcome(

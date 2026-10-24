@@ -11,12 +11,16 @@ All tests are offline: no AstrBot instance, no network, fabricated config only.
 import ast
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+from core.runtime import WriteResultUnknownError
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "main.py"
@@ -27,9 +31,15 @@ ADMIN_COMMANDS = {
     "cmd_weekly_summary", "cmd_cleanup_aged", "cmd_block", "cmd_unblock",
     "cmd_cleanup", "cmd_personality_edit", "cmd_personality_delete",
     "cmd_permanent_memory", "cmd_dynamic", "cmd_watch_bangumi", "cmd_umo",
+    "cmd_status", "cmd_schedule", "cmd_memory", "cmd_memory_integration",
+    "cmd_migrate_memory", "cmd_affection", "cmd_interest", "cmd_blocklist",
+    "cmd_personality", "cmd_personality_rollback", "cmd_daily_log",
+    "cmd_bangumi_memory",
 }
 
-USER_FACING_COMMANDS = {"cmd_bind", "cmd_memory", "cmd_affection", "cmd_help", "cmd_status"}
+USER_FACING_COMMANDS = {
+    "cmd_bind", "cmd_unbind", "cmd_help", "cmd_bili_parse", "cmd_regions",
+}
 
 
 def _main_class_tree():
@@ -284,6 +294,63 @@ class ScheduleProviderPassthroughTests(unittest.IsolatedAsyncioTestCase):
             plan = await mixin._ensure_autonomous_daily_plan(force=True)
             self.assertEqual(captured.get("provider_id"), "plan-model-01")
             self.assertEqual(plan.get("generation_status"), "success")
+
+
+class UnblockResultSafetyTests(unittest.IsolatedAsyncioTestCase):
+    def _command_and_bot(self, directory):
+        directory = Path(directory)
+        block_file = directory / "block_log.json"
+        affection_file = directory / "affection.json"
+        block_file.write_text(json.dumps({"123": {"reason": "test"}}), encoding="utf-8")
+        affection_file.write_text(json.dumps({"123": 42}), encoding="utf-8")
+
+        def load(path, default=None):
+            try:
+                return json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {} if default is None else default
+
+        def save(path, value):
+            Path(path).write_text(json.dumps(value), encoding="utf-8")
+
+        namespace = {
+            "os": os,
+            "datetime": datetime,
+            "DATA_DIR": str(directory),
+            "AFFECTION_FILE": str(affection_file),
+            "WriteResultUnknownError": WriteResultUnknownError,
+        }
+        command = _load_methods(["cmd_unblock"], namespace)["cmd_unblock"]
+        bot = types.SimpleNamespace(
+            config={"BILI_JCT": "csrf"},
+            _http_post=AsyncMock(),
+            _load_json=load,
+            _save_json=save,
+            _affection={"123": 42},
+        )
+        return command, bot, block_file, affection_file
+
+    async def test_unknown_unblock_preserves_local_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command, bot, block_file, affection_file = self._command_and_bot(directory)
+            bot._http_post.side_effect = WriteResultUnknownError("response lost")
+            replies = [item async for item in command(bot, Event("/bili解黑 123"))]
+            self.assertIn("结果未知", replies[-1])
+            self.assertNotIn("✅ 已解除拉黑", replies[-1])
+            self.assertIn("123", json.loads(block_file.read_text(encoding="utf-8")))
+            self.assertEqual(42, bot._affection["123"])
+            self.assertEqual(42, json.loads(affection_file.read_text(encoding="utf-8"))["123"])
+            bot._http_post.assert_awaited_once()
+
+    async def test_successful_unblock_still_commits_local_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command, bot, block_file, affection_file = self._command_and_bot(directory)
+            bot._http_post.return_value = ({"code": 0}, None)
+            replies = [item async for item in command(bot, Event("/bili解黑 123"))]
+            self.assertIn("✅ 已解除拉黑", replies[-1])
+            self.assertNotIn("123", json.loads(block_file.read_text(encoding="utf-8")))
+            self.assertEqual(0, bot._affection["123"])
+            self.assertEqual(0, json.loads(affection_file.read_text(encoding="utf-8"))["123"])
 
 
 if __name__ == "__main__":

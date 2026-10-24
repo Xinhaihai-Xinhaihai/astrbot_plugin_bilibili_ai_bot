@@ -986,7 +986,8 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             "last_message": message.get("content", ""),
             "source": "private_message",
             "score": self._affection.get(mid, 0),
-            "api_blocked": bool(blocked),
+            # None 表示远端结果未知，不能落盘成确定失败。
+            "api_blocked": None if blocked is None else bool(blocked),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
         self._save_json(block_file, block_log)
@@ -1295,6 +1296,7 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                 )
                 return True
             blocked = False
+            block_outcome = None
             if self.config.get("PRIVATE_MESSAGE_AUTO_BLOCK", True):
                 block_outcome = await self.event_runtime.execute(
                     ActionRequest(
@@ -1308,10 +1310,21 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                     lambda: self._block_user(int(mid)),
                 )
                 blocked = block_outcome.success
-            action = "已拉黑" if blocked else "已隔离，未完成拉黑"
-            self._record_private_block(message, decision.reason, blocked)
+            block_unknown = bool(
+                block_outcome is not None and block_outcome.state == "unknown"
+            )
+            action = (
+                "已拉黑" if blocked
+                else "已本地隔离，B站拉黑结果未知" if block_unknown
+                else "已隔离，未完成拉黑"
+            )
+            self._record_private_block(
+                message, decision.reason, None if block_unknown else blocked
+            )
             self._log_security_event(
-                "private_message_auto_block" if blocked else "private_message_quarantined",
+                "private_message_auto_block" if blocked
+                else "private_message_block_unknown" if block_unknown
+                else "private_message_quarantined",
                 mid,
                 username,
                 content,
@@ -1327,7 +1340,7 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             return True
 
         if (
-            not self.config.get("PRIVATE_MESSAGE_AUTO_REPLY", True)
+            not self.config.get("PRIVATE_MESSAGE_AUTO_REPLY", False)
             or not self._private_reply_scope_allows(mid)
         ):
             await self.event_runtime.transition(
@@ -1355,6 +1368,10 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             if sent:
                 logger.info(
                     f"[BiliBot] 🆕 已重置私信上下文：{username}({mid}) -> {new_thread_id}"
+                )
+            elif reset_outcome.state == "unknown":
+                logger.warning(
+                    f"[BiliBot] 私信上下文已重置，确认消息结果未知，不自动重发：{mid}"
                 )
             else:
                 logger.warning(f"[BiliBot] 私信上下文已重置，但确认消息发送失败：{mid}")
@@ -1446,6 +1463,10 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             if progress_sent:
                 logger.info(
                     f"[BiliBot] ✉️ 私信工具查询前回复 {username}：{progress_reply[:80]}"
+                )
+            elif progress_outcome.state == "unknown":
+                logger.warning(
+                    f"[BiliBot] 私信工具查询前回复结果未知，不自动重发：{mid}"
                 )
             else:
                 logger.warning(f"[BiliBot] 私信工具查询前回复发送失败：{mid}")

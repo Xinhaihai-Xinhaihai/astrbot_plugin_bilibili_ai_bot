@@ -324,8 +324,8 @@
   "PRIVATE_MESSAGE_AUTO_REPLY": {
     "description": "【私信·回复】自动回复安全私信",
     "type": "bool",
-    "default": true,
-    "hint": "使用当前 AstrBot 人设、BiliBot 记忆、用户画像和好感度回复；私信精确发送 new 可清空当前对话上下文。",
+    "default": false,
+    "hint": "默认关闭。管理员显式开启后，使用当前 AstrBot 人设、BiliBot 记忆、用户画像和好感度回复；私信精确发送 new 可清空当前对话上下文。",
     "condition": {
       "ENABLE_PRIVATE_MESSAGES": true
     }
@@ -1967,8 +1967,26 @@
   "ENABLE_LLM_TOOLS": {
     "description": "【安全与工具】启用 LLM 工具（B站查询、看视频、搜索）",
     "type": "bool",
-    "default": true,
-    "hint": "关闭后所有已注册工具直接返回提示不执行"
+    "default": false,
+    "hint": "默认关闭。显式开启后仍按真实平台、身份和通道授权；写操作需要管理员精确确认"
+  },
+  "SECURITY_ENABLE_PRIVATE_READ_TOOLS": {
+    "description": "【安全与工具】允许账号私密读取工具",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。开启后仍仅允许受信通道中的管理员读取 bili_recall、关注更新/开播和追番进度等账号或用户数据。",
+    "condition": {
+      "ENABLE_LLM_TOOLS": true
+    }
+  },
+  "SECURITY_ENABLE_WRITE_TOOLS": {
+    "description": "【安全与工具】允许 B站写操作工具",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。开启后仍需 QQ 私聊中的 AstrBot 管理员回复「确认」，并以相同工具和参数再次调用；不会因开启而自动执行。",
+    "condition": {
+      "ENABLE_LLM_TOOLS": true
+    }
   },
   "BILI_ALLOW_SEARCH_TOOLS": {
     "description": "【安全与工具】允许 B站端私信回复使用只读查询工具",

@@ -10,6 +10,7 @@ from .config import (
     WATCH_LOG_FILE,
 )
 from .content_protocol import ContentProtocolError, parse_bangumi_evaluation
+from .runtime import WriteResultUnknownError
 
 
 class BangumiMixin:
@@ -848,6 +849,8 @@ want_continue：是否值得继续追，烂番可以果断弃。
                 return True
             logger.debug(f"[BiliBot] 追番失败: {d}")
             return False
+        except WriteResultUnknownError:
+            raise
         except Exception as e:
             logger.warning(f"[BiliBot] 追番异常: {e}")
             return False

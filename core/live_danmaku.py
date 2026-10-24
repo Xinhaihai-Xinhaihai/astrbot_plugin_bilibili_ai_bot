@@ -15,7 +15,9 @@ from .config import (
     LEVEL_NAMES,
     REPLY_LOG_FILE,
 )
-from .runtime import ActionRequest, EventState, InboundEvent
+from .runtime import (
+    ActionRequest, EventState, InboundEvent, WriteResultUnknownError,
+)
 
 
 BILI_LIVE_HISTORY_URL = (
@@ -586,6 +588,10 @@ class LiveDanmakuMixin:
                 timeout=10,
                 retries=0,
             )
+        except WriteResultUnknownError as exc:
+            self._live_send_backoff_until = time.monotonic() + 60
+            self._record_live_error("send", f"弹幕发送结果未知，不自动重试: {exc}")
+            raise
         except Exception as exc:
             self._live_send_backoff_until = time.monotonic() + 60
             self._record_live_error("send", f"弹幕发送请求失败: {exc}")

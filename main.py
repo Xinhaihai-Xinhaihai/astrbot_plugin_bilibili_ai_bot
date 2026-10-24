@@ -12,6 +12,7 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.provider import ProviderRequest, LLMResponse
 from .core.config import *
+from .core.runtime import WriteResultUnknownError
 from .core import (
     UtilsMixin, LLMMixin, VisionMixin, MemoryMixin,
     AffectionMixin, PersonalityMixin, BilibiliAPIMixin,
@@ -539,6 +540,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
                 yield event.plain_result(f"❌ {msg}")
                 return
         yield event.plain_result("⏳ 还没确认成功，请在手机上确认后再发 /bili确认")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili状态")
     async def cmd_status(self, event: AstrMessageEvent):
         valid,info=await self.check_cookie()
@@ -603,9 +605,9 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             f"✅ 已触发主动:{', '.join(schedule['proactive_triggered']) if schedule['proactive_triggered'] else '暂无'}",
             f"✅ 已触发动态:{', '.join(schedule['dynamic_triggered']) if schedule['dynamic_triggered'] else '暂无'}",
             f"回复:{'✅' if self.config.get('ENABLE_REPLY',True) else '❌'} 好感:{'✅' if self.config.get('ENABLE_AFFECTION',True) else '❌'} 心情:{'✅' if self.config.get('ENABLE_MOOD',True) else '❌'}",
-            f"✉️ B站私信:{'✅' if self.config.get('ENABLE_PRIVATE_MESSAGES',False) else '❌'} 回复:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_REPLY',True) else '❌'}({private_scope}) 模型按需查询:{'✅' if self.config.get('PRIVATE_MESSAGE_BILI_SEARCH_ENABLED',True) else '❌'} 视频先看:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_WATCH_VIDEO',True) else '❌'} 上下文重置:new 间隔:活跃{private_active_interval}/空闲{private_idle_interval}秒 危险拉黑:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_BLOCK',True) else '❌'}",
+            f"✉️ B站私信:{'✅' if self.config.get('ENABLE_PRIVATE_MESSAGES',False) else '❌'} 回复:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_REPLY',False) else '❌'}({private_scope}) 模型按需查询:{'✅' if self.config.get('PRIVATE_MESSAGE_BILI_SEARCH_ENABLED',True) else '❌'} 视频先看:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_WATCH_VIDEO',True) else '❌'} 上下文重置:new 间隔:活跃{private_active_interval}/空闲{private_idle_interval}秒 危险拉黑:{'✅' if self.config.get('PRIVATE_MESSAGE_AUTO_BLOCK',True) else '❌'}",
             f"🎙️ 直播间互动:{'运行中' if live_status['running'] else ('已开启未运行' if live_status['enabled'] else '关闭')} | 房间:{live_status['room_id'] or '未配置'} | 轮询:{live_status['poll_interval']:g}秒 | 冷却:{live_status['cooldown']:g}秒 | 待回应:{live_status['pending_count']}",
-            f"主动:{'✅' if self.config.get('ENABLE_PROACTIVE',False) else '❌'} 动态:{'✅' if self.config.get('ENABLE_DYNAMIC',False) else '❌'} 特关:{'✅' if self.config.get('SPECIAL_FOLLOW_ENABLED',False) else '❌'} 演化:{'✅' if self.config.get('ENABLE_PERSONALITY_EVOLUTION',False) else '❌'} 工具:{'✅' if self.config.get('ENABLE_LLM_TOOLS',True) else '❌'}",
+            f"主动:{'✅' if self.config.get('ENABLE_PROACTIVE',False) else '❌'} 动态:{'✅' if self.config.get('ENABLE_DYNAMIC',False) else '❌'} 特关:{'✅' if self.config.get('SPECIAL_FOLLOW_ENABLED',False) else '❌'} 演化:{'✅' if self.config.get('ENABLE_PERSONALITY_EVOLUTION',False) else '❌'} 工具:{'✅' if self.config.get('ENABLE_LLM_TOOLS',False) else '❌'}",
             f"✉️ 主人推荐:{owner_recommend_delivery} | 最低{self.config.get('RECOMMEND_OWNER_MIN_SCORE', 8)}分 | 每日上限:{self.config.get('RECOMMEND_OWNER_DAILY_LIMIT', 1)}",
             f"🔍 联网搜索:{'✅ '+feature_status['web_search_backend'] if feature_status['web_search'] else '❌'} 判断模型:{'✅' if feature_status['web_search_judge'] else '❌(用主模型)'}",
             f"🎨 动态配图:{'✅ '+feature_status['image_gen_backend'] if feature_status['dynamic_image_generation'] else '❌'}{'（仅手动命令）' if feature_status.get('image_gen_backend') == 'novelai' else ''}",
@@ -686,7 +688,14 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             if not text:
                 yield event.plain_result("用法：/bili直播 测试 <弹幕内容>")
                 return
-            sent = await self._send_live_danmaku_text(text)
+            try:
+                sent = await self._send_live_danmaku_text(text)
+            except WriteResultUnknownError:
+                yield event.plain_result(
+                    "⚠️ 测试弹幕结果未知，部分或全部可能已经发送；"
+                    "请勿立即重复测试，先查看直播间。"
+                )
+                return
             yield event.plain_result(
                 f"✅ 已发送 {sent} 条测试弹幕。"
                 if sent
@@ -701,6 +710,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             "/bili直播 停止\n"
             "/bili直播 测试 <文字>"
         )
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili计划")
     async def cmd_schedule(self, event: AstrMessageEvent):
         schedule = self._get_schedule_snapshot()
@@ -873,6 +883,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         yield event.plain_result("🔄 刷新中...")
         _,msg=await self.refresh_cookie()
         yield event.plain_result(msg)
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili记忆")
     async def cmd_memory(self, event: AstrMessageEvent):
         parts = event.message_str.strip().split(maxsplit=2)
@@ -972,6 +983,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         else:
             yield event.plain_result("✅ 没有需要清理的老化记忆")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili联动")
     async def cmd_memory_integration(self, event: AstrMessageEvent):
         """查看供直播伴侣调用的统一记忆接口状态。"""
@@ -986,6 +998,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             "状态：✅ 等待直播插件按 B站 UID 读写"
         )
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili迁移记忆")
     async def cmd_migrate_memory(self, event: AstrMessageEvent):
         """手动将无有效 level 的旧记忆迁移（chat→recent/7分，其他→long_term/8分）。"""
@@ -1024,6 +1037,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         if not results:
             return f"没有找到与「{query}」相关的记忆。"
         return "\n".join([f"{i}. {r}" for i, r in enumerate(results, 1)])
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili好感")
     async def cmd_affection(self, event: AstrMessageEvent):
         parts = event.message_str.strip().split(maxsplit=1)
@@ -1062,10 +1076,21 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         if self._is_owner(uid):
             yield event.plain_result("❌ 不能拉黑主人！")
             return
-        success = await self._block_user(int(uid))
+        block_unknown = False
+        try:
+            success = await self._block_user(int(uid))
+        except WriteResultUnknownError:
+            success = False
+            block_unknown = True
         bl = self._load_json(os.path.join(DATA_DIR,"block_log.json"),{})
         bl[uid] = {"username":"手动拉黑","reason":"手动拉黑","time":datetime.now().strftime("%Y-%m-%d %H:%M")}
         self._save_json(os.path.join(DATA_DIR,"block_log.json"), bl)
+        if block_unknown:
+            yield event.plain_result(
+                f"⚠️ UID:{uid} 已加入本地黑名单，但B站拉黑结果未知；"
+                "请求可能已经生效，请勿重复操作，先人工核查远端状态。"
+            )
+            return
         yield event.plain_result(f"{'✅' if success else '⚠️'} 已拉黑 UID:{uid}{'（B站API调用成功）' if success else '（B站API失败，但已加入本地黑名单）'}")
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili解黑")
@@ -1084,6 +1109,12 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         try:
             d, _ = await self._http_post("https://api.bilibili.com/x/relation/modify", data={"fid":uid,"act":6,"re_src":11,"csrf":self.config.get("BILI_JCT","")})
             api_ok = d["code"]==0
+        except WriteResultUnknownError:
+            yield event.plain_result(
+                f"⚠️ UID:{uid} 的B站解黑结果未知，请求可能已经生效；"
+                "本地黑名单和好感度均未修改，请先人工核查远端状态，勿重复操作。"
+            )
+            return
         except Exception: api_ok=False
         del bl[uid]
         self._save_json(os.path.join(DATA_DIR,"block_log.json"), bl)
@@ -1091,6 +1122,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         self._affection[uid] = 0
         self._save_json(AFFECTION_FILE, self._affection)
         yield event.plain_result(f"✅ 已解除拉黑 UID:{uid}，好感度重置为0{'' if api_ok else '（B站API失败，但已从本地黑名单移除）'}")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili黑名单")
     async def cmd_blocklist(self, event: AstrMessageEvent):
         """查看拉黑名单"""
@@ -1135,6 +1167,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             msg_lines.append("")
             msg_lines.append("💡 /bili清理 all ← 同时压缩日志文件")
         yield event.plain_result("\n".join(msg_lines))
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili性格")
     async def cmd_personality(self, event: AstrMessageEvent):
         """查看性格演化记录。用法: /bili性格"""
@@ -1281,6 +1314,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         desc = removed.get("change", removed) if isinstance(removed, dict) else removed
         yield event.plain_result(f"✅ 已删除：{desc}")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili性格回滚")
     async def cmd_personality_rollback(self, event: AstrMessageEvent):
         """回滚最近一次自动演化动态区块；不影响核心人设和手动条目。"""
@@ -1297,6 +1331,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
             return
         yield event.plain_result(await self._test_comment_context(parts[1], parts[2] if len(parts) > 2 else ""))
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili日志")
     async def cmd_daily_log(self, event: AstrMessageEvent):
         """统一日志入口。用法: /bili日志 <视频|番剧|动态|回复> [日期YYYY-MM-DD]"""
@@ -1505,6 +1540,7 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
         self._bangumi_task = asyncio.create_task(self._run_bangumi(season_id=season_id))
         yield event.plain_result(f"🎬 开始看番{'（sid=' + str(season_id) + '）' if season_id else '（随机选番）'}...")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili番剧记忆")
     async def cmd_bangumi_memory(self, event: AstrMessageEvent):
         """查看番剧追番记忆。用法: /bili番剧记忆"""
