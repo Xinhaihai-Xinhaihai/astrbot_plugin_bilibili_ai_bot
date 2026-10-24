@@ -1,0 +1,5 @@
+# 统一用 LF 换行，Windows 上检出也保持 LF。
+* text=auto eol=lf
+
+*.png binary
+*.otf binary
