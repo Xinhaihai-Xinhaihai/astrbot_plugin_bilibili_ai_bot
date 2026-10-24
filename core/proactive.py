@@ -1150,7 +1150,10 @@ recommend_owner判断：你真的喜欢、惊讶、被逗笑或发现有意思�
 - recommend_reason写视频中的具体看点和你想分享的感受，不把“题材符合人设”当作唯一理由；不分享时填false且理由留空。
 - 你的兴趣和{on}的兴趣是两回事。可以说“我觉得这里有意思”，没有明确反馈就不能说“你喜欢这个”“你肯定爱看”。你看过、喜欢或分享过的视频，都不能证明对方喜欢。
 - 对方明确表达的兴趣可以作为交流参考，没有这类记忆也可以自发分享；不要编造对方的偏好、请求或生活习惯，也不要把一次需求变成长期爱好。
-偏好可以变化：近期厌倦、负面体验或新题材的吸引力都能推翻旧倾向；未知题材保持好奇，单次喜欢不等于稳定爱好。"""
+偏好可以变化：近期厌倦、负面体验或新题材的吸引力都能推翻旧倾向；未知题材保持好奇，单次喜欢不等于稳定爱好。
+
+want_dynamic判断：看完是否真有话想在自己的B站动态里说——想点评、吐槽、安利，或者它让你联想到别的事。和评分高低无关，烂得好笑的视频也可以；没有具体想说的就填false，大多数视频都是false。
+- dynamic_angle写想说的具体角度（例如“结尾反转其实早有伏笔”），不想发时留空。"""
         custom_proactive_inst = self.config.get("CUSTOM_PROACTIVE_INSTRUCTION", "")
         if custom_proactive_inst:
             prompt += f"\n\n【补充提示词】{custom_proactive_inst}"
@@ -1523,6 +1526,7 @@ recommend_owner判断：你真的喜欢、惊讶、被逗笑或发现有意思�
         )
         logger.info(f"[BiliBot] 📋 共找到 {len(unique)} 个视频")
         watch_count = 0
+        dynamic_candidates = []
         comment_count = self._today_proactive_comment_count(
             watch_log, self._load_json(PROACTIVE_LOG_FILE, [])
         )
@@ -1795,7 +1799,18 @@ recommend_owner判断：你真的喜欢、惊讶、被逗笑或发现有意思�
                         actions.append("➕关注")
                         logger.info(f"[BiliBot] ➕ 关注了 {video.get('up_name', '')}")
             log_entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "bvid": bvid, "title": video.get("title", ""), "up_name": video.get("up_name", ""), "up_mid": str(video.get("up_mid", "")), "score": score, "score_reason": score_reason, "mood": mood, "comment": comment, "review": review, "preference_signals": preference_signals, "search_keywords": search_keywords, "actions": actions, "pic": video.get("pic", ""), "tname": evaluation.get("partition") or analysis_info.get("tname", ""), "source": video.get("_source", ""), "source_detail": video.get("_source_detail", ""), "manual": is_manual}
+            want_dynamic = bool(evaluation.get("want_dynamic")) and bool(evaluation.get("dynamic_angle"))
+            if want_dynamic:
+                logger.info(f"[BiliBot] 📝 看完想发动态：{evaluation.get('dynamic_angle', '')}")
+                dynamic_candidates.append({
+                    "bvid": bvid, "title": video.get("title", ""), "up_name": video.get("up_name", ""),
+                    "pic": video.get("pic", ""), "score": score, "review": review,
+                    "angle": evaluation.get("dynamic_angle", ""),
+                    "content_summary": self._clip_media_text(video_description, 360),
+                })
             log_entry.update(
+                want_dynamic=want_dynamic,
+                dynamic_angle=evaluation.get("dynamic_angle", "") if want_dynamic else "",
                 discovery_mode="explore" if video.get("_exploration") else "interest",
                 recommend_reason=evaluation.get("recommend_reason", ""),
                 recommended_at=getattr(self, "_owner_last_recommended_at", "") if any(self._is_owner_recommend_action(action) for action in actions) else "",
@@ -1876,6 +1891,16 @@ recommend_owner判断：你真的喜欢、惊讶、被逗笑或发现有意思�
             f"[BiliBot] 🎉 刷B站完成！看了 {watch_count} 个视频，"
             f"本轮评论了 {max(0, comment_count - comments_before_run)} 条"
         )
+        await self._post_video_dynamic(dynamic_candidates)
+
+    async def _post_video_dynamic(self, candidates):
+        """一轮最多为一个标注过“想发动态”的视频发动态，挑最新的那个。"""
+        if not candidates or not self.config.get("ENABLE_DYNAMIC", False):
+            return
+        if not self.config.get("DYNAMIC_FROM_VIDEO", True):
+            return
+        # 最后看的那条感觉最新鲜；动态侧仍会检查每日上限和重复。
+        await self._run_dynamic(video=candidates[-1])
 
     # ── 特别关注定时巡视 ──
 

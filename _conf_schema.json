@@ -1381,10 +1381,10 @@
     "hint": "按计划自己发 B站 动态；建议先用固定时刻观察几天再放开。"
   },
   "DYNAMIC_TIMES_COUNT": {
-    "description": "【动态发布】每天触发几次动态发布",
+    "description": "【动态发布】每天有几次“想不想发动态”的机会",
     "type": "int",
     "default": 1,
-    "hint": "建议 1-3 次",
+    "hint": "每次机会先按发布意愿掷一次，再由模型决定发不发；不是每天必须发的条数。",
     "min": 0,
     "max": 12,
     "condition": {
@@ -1413,25 +1413,73 @@
     "default": 1,
     "min": 1,
     "max": 30,
-    "hint": "1表示每天最多一次，2或3表示至少隔2或3天。只在有真实素材时发布；手动请求不受此间隔限制。",
+    "hint": "1表示每天最多一次定时动态，2或3表示至少隔2或3天。看完视频想发的动态和手动请求不受此间隔限制。",
+    "condition": {
+      "ENABLE_DYNAMIC": true
+    }
+  },
+  "DYNAMIC_POST_CHANCE": {
+    "description": "【动态发布】定时机会的发布意愿（%）",
+    "type": "int",
+    "default": 35,
+    "min": 0,
+    "max": 100,
+    "hint": "每个定时机会先按这个概率决定要不要想发什么，之后模型仍可以选择不发。0 表示只在看完视频想发或手动请求时发动态。",
+    "condition": {
+      "ENABLE_DYNAMIC": true
+    },
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    }
+  },
+  "DYNAMIC_FROM_VIDEO": {
+    "description": "【动态发布】看完视频想说时发动态",
+    "type": "bool",
+    "default": true,
+    "hint": "主动看视频时，模型可以给某个视频标注“想发动态”；一轮结束后为其中一个发动态。仍受每日条数上限约束，同一视频只发一次。",
+    "condition": {
+      "ENABLE_DYNAMIC": true
+    }
+  },
+  "DYNAMIC_WEB_SEARCH_MAX": {
+    "description": "【动态发布】写动态前最多联网查几次",
+    "type": "int",
+    "default": 2,
+    "min": 0,
+    "max": 3,
+    "hint": "需要先开启联网搜索。模型觉得要核实事实或补充资料时才会查；0 表示写动态时不联网。",
     "condition": {
       "ENABLE_DYNAMIC": true
     }
   },
   "DYNAMIC_TOPICS": {
-    "description": "【动态发布】动态主题池（每行一个）",
+    "description": "【动态发布】可以写的方向（每行一个）",
     "type": "list",
     "default": [],
-    "hint": "留空使用默认主题池",
+    "hint": "留空使用默认方向：分享日常、自我思考、吐槽近况、写段子、视频点评。模型每次从中挑一个和手上素材最合适的。",
     "condition": {
       "ENABLE_DYNAMIC": true
     }
+  },
+  "DYNAMIC_PROMPT": {
+    "description": "【动态发布】动态风格提示词",
+    "type": "text",
+    "default": "B站动态的感觉：\n- 像本人忽然想起一件具体的小事、一个念头或一句吐槽后随手发出来，不像在完成“发动态”任务\n- 一条只说一个中心，先让读者看得懂发生了什么或你在想什么；不要故作深沉、写成谜语或强行升华\n- 不写运营口吻、鸡汤结尾、每日打卡式开场，也不要习惯性向大家提问或讨互动\n- 句式和长短可以变化，通常1到3句、15到100字；没有足够内容时宁可短，不凑到固定篇幅\n- 当前时段只是背景，确实和内容有关时再自然带到",
+    "hint": "整段替换内置的动态风格说明。清空则使用内置默认。不伪造经历、不公开私密内容等硬性规则始终附加，不受这里影响。",
+    "condition": {
+      "ENABLE_DYNAMIC": true
+    },
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "editor_theme": "vs-dark"
   },
   "CUSTOM_DYNAMIC_INSTRUCTION": {
     "description": "【动态发布】发动态的补充提示词",
     "type": "text",
     "default": "",
-    "hint": "例如：动态风格偏文艺，多用比喻。",
+    "hint": "附加在动态提示词末尾的补充，例如：动态风格偏文艺，多用比喻。",
     "condition": {
       "ENABLE_DYNAMIC": true
     },

@@ -42,6 +42,21 @@ class VideoEvaluationSchemaTests(unittest.TestCase):
         self.assertEqual(result["preference_signals"][0]["value"], "守塔人")
         self.assertEqual(result["search_keywords"][0], "守塔人 人物解析")
 
+    def test_dynamic_wish_defaults_off_and_needs_angle(self):
+        result = self.parse(payload())
+        self.assertFalse(result["want_dynamic"])
+        self.assertEqual(result["dynamic_angle"], "")
+        result = self.parse(payload(want_dynamic=True, dynamic_angle="结尾那个停顿其实开头就埋了"))
+        self.assertTrue(result["want_dynamic"])
+        self.assertEqual(result["dynamic_angle"], "结尾那个停顿其实开头就埋了")
+        for bad in (
+            payload(want_dynamic=True, dynamic_angle=""),
+            payload(want_dynamic=False, dynamic_angle="想说说"),
+            payload(want_dynamic="true", dynamic_angle="想说说"),
+        ):
+            with self.assertRaises(VideoEvaluationError):
+                self.parse(bad)
+
     def test_plain_text_partial_json_and_extra_fields_are_rejected(self):
         for value in ("挺好看的，8分", '{"score":8', payload(analysis="内部分析")):
             with self.subTest(value=value):

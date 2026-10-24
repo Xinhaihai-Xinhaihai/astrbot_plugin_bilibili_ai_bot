@@ -111,7 +111,7 @@ Bot 可在聊天中通过自然语言触发以下能力，工具结果回到 LLM
 
 推荐起步设置：`RECOMMEND_OWNER_MIN_SCORE=7`、`RECOMMEND_OWNER_DAILY_LIMIT=3`、`RECOMMEND_OWNER_MIN_GAP_MINUTES=120`。有具体看点才分享，同一 BV 的成功分享记录单独保存，重启或清理观看流水后仍可去重。升级不会覆盖你现有的 8 分/1 次或其他自定义值；希望增加推荐时请主动修改这些设置。
 
-动态仍结合人设主动创作。`DYNAMIC_MIN_INTERVAL_DAYS=1` 表示每天最多一条，`2` 或 `3` 表示至少隔两天或三天；真实素材不足或内容重复时可跳过。素材来自近期公开视频、番剧和动态记忆，不使用 QQ/私信聊天或主人的私密画像。手动 `/bili动态` 不受间隔限制，仍遵守每日安全上限。`DYNAMIC_DAILY_COUNT=0` 表示这条不额外限条数（仍受自主上限和统一行为预算约束）；周报和日报动态是固定投递，不占用这条最短间隔。
+动态仍结合人设主动创作，但不是每天必发。每个定时时刻只是一次机会：先按 `DYNAMIC_POST_CHANCE`（默认 35%）决定这次要不要想，再由模型决定发不发，没有想说的就不发。`DYNAMIC_MIN_INTERVAL_DAYS=1` 表示定时动态每天最多一条，`2` 或 `3` 表示至少隔两天或三天。主动看视频时，模型可以给某个视频标注“想发动态”并写下想说的角度，一轮结束后为其中一个发动态（`DYNAMIC_FROM_VIDEO`），可选附上视频封面；这类动态不走概率和间隔，但仍受每日条数上限约束，同一视频只发一次。写动态前模型可以联网查资料（需开启联网搜索，`DYNAMIC_WEB_SEARCH_MAX` 控制次数）。默认可写的方向是分享日常、自我思考、吐槽近况、写段子和视频点评，可在 `DYNAMIC_TOPICS` 改写；`DYNAMIC_PROMPT` 可整段替换动态风格提示词，不伪造经历、不公开私密内容的规则始终生效。素材来自近期公开视频、番剧和动态记忆，不使用 QQ/私信聊天或主人的私密画像。手动 `/bili动态` 不受概率和间隔限制，仍遵守每日安全上限。`DYNAMIC_DAILY_COUNT=0` 表示这条不额外限条数（仍受自主上限和统一行为预算约束）；周报和日报动态是固定投递，不占用这条最短间隔。
 
 已分析的视频再次出现在 QQ、B站私信或评论区时，优先使用原摘要、评分和感想；详细分析老化不会自动触发重看，也不会把这次回忆算成新的爱好证据。主人在B站私信明确说“重看”，或管理员在 QQ 明确要求“重新看”并调用观看工具时，才重新分析。只靠标题/简介生成的旧 QQ 预览会与真实观看记录区分；资料不足会说明尚未确认内容，不补造评分。
 
@@ -264,8 +264,12 @@ git clone https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
 |`RECOMMEND_OWNER_MIN_SCORE`  |可选|Bot 自己的观后评分达到此值且想分享时才推荐，默认 8；不要求与主人的爱好相同|
 |`RECOMMEND_OWNER_DAILY_LIMIT`|可选|每天最多推荐次数，默认 1；`0` 表示不限制|
 |`ENABLE_DYNAMIC`             |可选|启用自动发动态；默认关闭，需管理员显式开启                                     |
-|`DYNAMIC_TIMES_COUNT`        |可选|每天触发几次动态发布                                                           |
+|`DYNAMIC_TIMES_COUNT`        |可选|每天有几次“想不想发动态”的机会，不是必发条数                                      |
 |`DYNAMIC_DAILY_COUNT`        |可选|每天最多发几条动态                                                            |
+|`DYNAMIC_POST_CHANCE`        |可选|定时机会的发布意愿（%），默认 35；0 表示只在看完视频想发或手动请求时发            |
+|`DYNAMIC_FROM_VIDEO`         |可选|看完视频标注了想发动态时发一条，默认开启                                         |
+|`DYNAMIC_WEB_SEARCH_MAX`     |可选|写动态前最多联网查几次，默认 2；需开启联网搜索                                   |
+|`DYNAMIC_PROMPT`             |可选|动态风格提示词，可整段替换；清空使用内置默认                                     |
 |`ENABLE_WEB_PANEL`           |可选|启用 Web 管理面板                                                          |
 |`WEB_PANEL_PORT`             |可选|Web 面板端口，默认 5001                                                     |
 |`WEB_PANEL_PASSWORD`         |可选|Web 面板密码，默认 `admin123` ⚠️ **部署在公网务必修改**                               |
@@ -428,4 +432,7 @@ git clone https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
 
 ## 📄 License
 
-MIT
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布，与 AstrBot 插件生态的要求一致。
+
+- 修改本插件并通过网络向他人提供服务（例如部署成公开 Bot）时，需要向使用者提供修改后的完整源代码。
+- `assets/fonts/` 中的字体按其自带的 [SIL Open Font License](assets/fonts/OFL.txt) 授权。

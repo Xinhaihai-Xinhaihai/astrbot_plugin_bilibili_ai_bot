@@ -45,6 +45,48 @@ class ContentProtocolTests(unittest.TestCase):
                 '"need_image":false,"image_prompt":"a lighthouse"}'
             )
 
+    def test_dynamic_search_requires_permission_and_query(self):
+        raw = ('{"decision":"search","text":"","search_query":"某作品 最新一集 播出时间",'
+               '"image":"none","image_prompt":""}')
+        with self.assertRaises(ContentProtocolError):
+            parse_dynamic_content(raw)
+        result = parse_dynamic_content(raw, allow_search=True)
+        self.assertEqual(result["decision"], "search")
+        self.assertEqual(result["search_query"], "某作品 最新一集 播出时间")
+        with self.assertRaises(ContentProtocolError):
+            parse_dynamic_content(
+                '{"decision":"search","text":"顺便先写好","search_query":"x",'
+                '"image":"none","image_prompt":""}', allow_search=True,
+            )
+        with self.assertRaises(ContentProtocolError):
+            parse_dynamic_content(
+                '{"decision":"post","text":"今天也很平静。","search_query":"x",'
+                '"image":"none","image_prompt":""}', allow_search=True,
+            )
+
+    def test_dynamic_video_cover_only_with_video(self):
+        raw = ('{"decision":"post","text":"这期结尾的反转其实第一分钟就埋了。",'
+               '"search_query":"","image":"video_cover","image_prompt":""}')
+        with self.assertRaises(ContentProtocolError):
+            parse_dynamic_content(raw)
+        result = parse_dynamic_content(raw, allow_video_cover=True)
+        self.assertEqual(result["image"], "video_cover")
+        self.assertTrue(result["need_image"])
+
+    def test_dynamic_generate_image_needs_prompt(self):
+        with self.assertRaises(ContentProtocolError):
+            parse_dynamic_content(
+                '{"decision":"post","text":"雾里的灯塔。","search_query":"",'
+                '"image":"generate","image_prompt":""}'
+            )
+
+    def test_dynamic_legacy_envelope_still_accepted(self):
+        result = parse_dynamic_content(
+            '{"decision":"post","text":"雾里的灯塔。","need_image":true,"image_prompt":"a lighthouse"}'
+        )
+        self.assertEqual(result["image"], "generate")
+        self.assertEqual(result["image_prompt"], "a lighthouse")
+
     def test_bangumi_comment_cannot_leak_internal_fields(self):
         valid = parse_bangumi_evaluation(
             '{"score":7,"comment":"这段停顿比台词还扎心",'
