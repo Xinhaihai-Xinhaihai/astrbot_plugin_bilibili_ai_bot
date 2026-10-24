@@ -74,29 +74,60 @@ def parse_recommendation(raw: str) -> dict[str, Any]:
     return {"decision": decision, "text": text}
 
 
-def parse_dynamic_content(raw: str) -> dict[str, Any]:
+DYNAMIC_IMAGE_CHOICES = {"none", "generate", "video_cover"}
+
+
+def parse_dynamic_content(
+    raw: str, *, allow_search: bool = False, allow_video_cover: bool = False,
+) -> dict[str, Any]:
+    """Validate a dynamic decision.
+
+    ``search`` only asks the host to run a read-only web query and feed the
+    result back; it never publishes anything.  The legacy
+    ``need_image``/``image_prompt`` envelope is still accepted.
+    """
     value = _object(raw)
-    expected = {"decision", "text", "need_image", "image_prompt"}
-    if set(value) != expected:
+    legacy = {"decision", "text", "need_image", "image_prompt"}
+    current = {"decision", "text", "search_query", "image", "image_prompt"}
+    if set(value) == legacy:
+        need_image = value.get("need_image")
+        if not isinstance(need_image, bool):
+            raise ContentProtocolError("need_image_must_be_boolean")
+        value = {
+            "decision": value.get("decision"), "text": value.get("text"),
+            "search_query": "", "image": "generate" if need_image else "none",
+            "image_prompt": value.get("image_prompt"),
+        }
+    elif set(value) != current:
         raise ContentProtocolError("dynamic_schema_mismatch")
     decision = str(value.get("decision") or "").strip().lower()
-    if decision not in {"post", "skip"}:
+    if decision not in {"post", "skip", "search"}:
         raise ContentProtocolError("invalid_dynamic_decision")
+    if decision == "search" and not allow_search:
+        raise ContentProtocolError("dynamic_search_not_allowed")
     text = _public_text(value.get("text"), field="text", limit=200, required=decision == "post")
-    need_image = value.get("need_image")
-    if not isinstance(need_image, bool):
-        raise ContentProtocolError("need_image_must_be_boolean")
+    search_query = _public_text(
+        value.get("search_query"), field="search_query", limit=80,
+        required=decision == "search",
+    )
+    image = str(value.get("image") or "").strip().lower()
+    if image not in DYNAMIC_IMAGE_CHOICES:
+        raise ContentProtocolError("invalid_dynamic_image")
+    if image == "video_cover" and not allow_video_cover:
+        raise ContentProtocolError("video_cover_not_available")
     image_prompt = _public_text(
         value.get("image_prompt"), field="image_prompt", limit=500,
-        required=decision == "post" and need_image,
+        required=decision == "post" and image == "generate",
     )
-    if decision == "skip" and (text or need_image or image_prompt):
-        raise ContentProtocolError("skipped_dynamic_has_content")
-    if not need_image and image_prompt:
+    if decision != "post" and (text or image != "none" or image_prompt):
+        raise ContentProtocolError(f"{decision}_dynamic_has_content")
+    if decision != "search" and search_query:
+        raise ContentProtocolError("search_query_without_search")
+    if image != "generate" and image_prompt:
         raise ContentProtocolError("image_prompt_without_image")
     return {
-        "decision": decision, "text": text,
-        "need_image": need_image, "image_prompt": image_prompt,
+        "decision": decision, "text": text, "search_query": search_query,
+        "image": image, "need_image": image != "none", "image_prompt": image_prompt,
     }
 
 
@@ -142,7 +173,9 @@ RECOMMENDATION_SCHEMA_PROMPT = (
 )
 
 DYNAMIC_SCHEMA_PROMPT = (
-    '只输出完整JSON：{"decision":"post|skip","text":"动态正文",'
-    '"need_image":false,"image_prompt":""}。没有真实且具体的发布动机就用skip，'
-    "此时text和image_prompt留空、need_image为false。"
+    '只输出完整JSON：{"decision":"post|skip|search","text":"动态正文",'
+    '"search_query":"","image":"none|generate|video_cover","image_prompt":""}。'
+    "没有真实且具体的发布动机就用skip；skip和search时text、image_prompt留空、image为none。"
+    "search只在可用时使用，search_query写一条具体的搜索词，查到的资料会再交给你决定。"
+    "image为generate时image_prompt写画面描述，其余情况留空。"
 )
