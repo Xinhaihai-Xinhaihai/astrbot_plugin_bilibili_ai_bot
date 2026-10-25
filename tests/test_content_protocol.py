@@ -6,6 +6,8 @@ from core.content_protocol import (
     parse_dynamic_content,
     parse_proactive_comment,
     parse_recommendation,
+    parse_share_reaction,
+    parse_share_watch_decision,
 )
 
 
@@ -98,6 +100,30 @@ class ContentProtocolTests(unittest.TestCase):
                 '{"score":7,"comment":"decision: post",'
                 '"mood":"感动","review":"不错","want_continue":true}'
             )
+
+
+class ShareProtocolTests(unittest.TestCase):
+    def test_watch_decision_is_watch_or_skip_only(self):
+        self.assertEqual(parse_share_watch_decision('{"decision":"watch"}')["decision"], "watch")
+        self.assertEqual(parse_share_watch_decision('{"decision":"SKIP"}')["decision"], "skip")
+        for raw in ('看看吧', '{"decision":"maybe"}', '{"decision":"watch","why":"好奇"}'):
+            with self.subTest(raw=raw), self.assertRaises(ContentProtocolError):
+                parse_share_watch_decision(raw)
+
+    def test_reaction_is_one_short_public_line(self):
+        self.assertEqual(
+            parse_share_reaction('{"decision":"comment","text":"这猫弹得比我好"}')["text"],
+            "这猫弹得比我好",
+        )
+        self.assertEqual(parse_share_reaction('{"decision":"skip","text":""}')["text"], "")
+        for raw in (
+            '{"decision":"comment","text":""}',
+            '{"decision":"skip","text":"其实想说"}',
+            '{"decision":"comment","text":"' + "长" * 61 + '"}',
+            '{"decision":"comment","text":"score_delta: 1"}',
+        ):
+            with self.subTest(raw=raw), self.assertRaises(ContentProtocolError):
+                parse_share_reaction(raw)
 
 
 if __name__ == "__main__":

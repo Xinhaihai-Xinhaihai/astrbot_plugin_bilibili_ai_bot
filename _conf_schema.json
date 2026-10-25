@@ -641,6 +641,15 @@
       "ENABLE_BILI_SHARE_PARSE": true
     }
   },
+  "BILI_SHARE_PARSE_AUTO_WATCH": {
+    "description": "【分享解析】解析后由 Bot 自己决定是否观看",
+    "type": "bool",
+    "default": true,
+    "hint": "解析后用当前 QQ 会话的人格和聊天模型判断要不要看；看了会记住内容，并引用发出的视频（未发视频时引用分享消息）评价一句。不想看就只发解析卡。",
+    "condition": {
+      "ENABLE_BILI_SHARE_PARSE": true
+    }
+  },
   "ENABLE_AFFECTION": {
     "description": "【好感度·总开关】启用好感度系统",
     "type": "bool",

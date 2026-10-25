@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from ..security import Scope, readable_scopes
 from .db import Database, now
@@ -222,6 +222,20 @@ class SeenVideoStore:
             "SELECT * FROM seen_videos WHERE bvid=?", (key,)
         )
         return dict(row) if row is not None else None
+
+    async def forget(self, bvids: Iterable[str]) -> int:
+        """删除误记的观看痕迹；只用于修复从未真正观看过的条目。"""
+        keys = [key for key in (self.normalize_bvid(b) for b in bvids) if key]
+
+        def _forget(conn):
+            removed = 0
+            for key in keys:
+                removed += conn.execute(
+                    "DELETE FROM seen_videos WHERE bvid=?", (key,)
+                ).rowcount
+            return removed
+
+        return int(await self._db.run(_forget)) if keys else 0
 
     async def all_bvids(self) -> set[str]:
         rows = await self._db.fetch_all("SELECT bvid FROM seen_videos")

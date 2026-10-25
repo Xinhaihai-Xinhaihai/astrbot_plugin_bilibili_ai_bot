@@ -442,6 +442,66 @@ class UnifiedMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("BV0000000000", seen)
         self.assertEqual(await self.layers.seen_videos.count(), 205)
 
+    async def test_new_share_card_is_not_a_watch_record(self):
+        bot = self.bot([])
+
+        async def no_embedding(_text):
+            return None
+
+        bot._get_embedding = no_embedding
+        await bot._save_self_memory_record(
+            "group_share:BV1SHARE0001",
+            "[2026-10-25 12:00] 群聊有人分享了B站视频《分享》，UP:某人，简介:简介",
+            memory_type="video",
+            extra={"bvid": "BV1SHARE0001", "content_analyzed": False},
+        )
+        self.assertEqual(await bot._initialize_seen_videos(), 0)
+        self.assertFalse(await bot._has_seen_video("BV1SHARE0001"))
+
+    async def test_old_share_cards_lose_their_false_seen_marks(self):
+        def card(bvid):
+            return {
+                "rpid": f"group_share:{bvid}_1", "thread_id": f"group_share:{bvid}",
+                "text": f"[2026-10-20 12:00] 群聊有人分享了B站视频《{bvid}》",
+                "time": "2026-10-20 12:00", "source": "bilibili",
+                "memory_type": "video", "bvid": bvid, "user_id": "self",
+            }
+
+        watched = {
+            "rpid": "qq_share:BV1REALWATCH_1", "thread_id": "qq_share:BV1REALWATCH",
+            "text": "视频摘要《真看过》", "time": "2026-10-20 12:05",
+            "source": "bilibili", "memory_type": "video",
+            "bvid": "BV1REALWATCH", "user_id": "self",
+        }
+        bot = self.bot([card("BV1ONLYCARD0"), card("BV1REALWATCH"), card("BV1COPIED000"), watched])
+        # An earlier plugin version imported every card into the permanent ledger,
+        # and a cache hit copied one card into the video cache as a summary.
+        await self.layers.seen_videos.import_many(
+            [{"bvid": b, "source": "bilibili"} for b in ("BV1ONLYCARD0", "BV1REALWATCH")]
+        )
+        bot._save_json(self.config.VIDEO_MEMORY_FILE, {"BV1COPIED000": {
+            "bvid": "BV1COPIED000", "source": "semantic_memory",
+            "summary": "[2026-10-20 12:00] 群聊有人分享了B站视频《BV1COPIED000》",
+            "time": "2026-10-20 12:00",
+        }})
+        bot._save_json(self.config.SEEN_VIDEOS_FILE, {"BV1COPIED000": {
+            "bvid": "BV1COPIED000", "source": "tool_watch",
+        }})
+
+        await bot._initialize_seen_videos()
+
+        self.assertFalse(await bot._has_seen_video("BV1ONLYCARD0"))
+        self.assertFalse(await bot._has_seen_video("BV1COPIED000"))
+        self.assertTrue(await bot._has_seen_video("BV1REALWATCH"))
+        self.assertNotIn("BV1COPIED000", bot._load_json(self.config.VIDEO_MEMORY_FILE, {}))
+        cards = [m for m in bot._memory if str(m.get("thread_id")).startswith("group_share:")]
+        self.assertTrue(all(m.get("content_analyzed") is False for m in cards))
+        reloaded = await self.layers.memories.load_legacy()
+        self.assertTrue(all(
+            m.get("content_analyzed") is False
+            for m in reloaded if str(m.get("thread_id")).startswith("group_share:")
+        ))
+
     async def test_video_experience_is_vectorized_and_recalled(self):
         bot = self.bot([])
 

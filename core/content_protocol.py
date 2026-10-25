@@ -74,6 +74,29 @@ def parse_recommendation(raw: str) -> dict[str, Any]:
     return {"decision": decision, "text": text}
 
 
+def parse_share_watch_decision(raw: str) -> dict[str, Any]:
+    value = _object(raw)
+    if set(value) != {"decision"}:
+        raise ContentProtocolError("share_watch_schema_mismatch")
+    decision = str(value.get("decision") or "").strip().lower()
+    if decision not in {"watch", "skip"}:
+        raise ContentProtocolError("invalid_share_watch_decision")
+    return {"decision": decision}
+
+
+def parse_share_reaction(raw: str) -> dict[str, Any]:
+    value = _object(raw)
+    if set(value) != {"decision", "text"}:
+        raise ContentProtocolError("share_reaction_schema_mismatch")
+    decision = str(value.get("decision") or "").strip().lower()
+    if decision not in {"comment", "skip"}:
+        raise ContentProtocolError("invalid_share_reaction_decision")
+    text = _public_text(value.get("text"), field="text", limit=60, required=decision == "comment")
+    if decision == "skip" and text:
+        raise ContentProtocolError("skipped_share_reaction_has_text")
+    return {"decision": decision, "text": text}
+
+
 DYNAMIC_IMAGE_CHOICES = {"none", "generate", "video_cover"}
 
 
@@ -170,6 +193,16 @@ PROACTIVE_COMMENT_SCHEMA_PROMPT = (
 RECOMMENDATION_SCHEMA_PROMPT = (
     '只输出完整JSON：{"decision":"share|skip","text":"随手分享附言"}。'
     "仍然觉得适合分享才用share；理由牵强或写不自然就用skip且text留空。"
+)
+
+SHARE_WATCH_SCHEMA_PROMPT = (
+    '只输出完整JSON：{"decision":"watch|skip"}。'
+    "按你自己的兴趣和这段对话判断：真的想看才用watch，不感兴趣或没必要就用skip。"
+)
+
+SHARE_REACTION_SCHEMA_PROMPT = (
+    '只输出完整JSON：{"decision":"comment|skip","text":"一句评价"}。'
+    "看完有具体感受才用comment，text是一句口语化的短评；说不出具体内容就用skip且text留空。"
 )
 
 DYNAMIC_SCHEMA_PROMPT = (

@@ -58,7 +58,6 @@ _WRITE_TOOLS = {
 }
 _PRIVATE_READ_TOOLS = {
     "bili_recall",
-    "watch_video",
     "recall_user",
     "recall_conversation",
     "recall_today",
@@ -71,6 +70,9 @@ _PRIVATE_READ_TOOLS = {
 }
 _PUBLIC_READ_TOOLS = {
     "bili_parse_video",
+    # Watching analyzes a public video and only reads the bot's own video
+    # memories; it never touches account-private data, so QQ groups may use it.
+    "watch_video",
     "search_bilibili",
     "bili_bangumi",
     "get_up_info",
