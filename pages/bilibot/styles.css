@@ -598,6 +598,11 @@ button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus
 .time-add .gicon { width: 17px; height: 17px; }
 .time-remove:hover, .time-add:hover { border-color: rgba(86,120,210,.28); background: #fff; color: #4f6ccb; }
 
+.list-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.list-choice { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(250,251,254,.9); color: var(--text); font-size: 13px; font-weight: 620; cursor: pointer; }
+.list-choice:has(input:checked) { border-color: rgba(86,120,210,.42); background: rgba(76,131,237,.08); color: #4f6ccb; }
+.list-choice input { width: 15px; height: 15px; accent-color: #4f6ccb; }
+
 .activity-panel { min-height: 158px; padding: 21px 25px; }
 .activity-copy p { font-size: 12px; }
 .activity-track { --activity: 55%; position: relative; height: 18px; border-radius: 18px; background: #dfe4ec; box-shadow: inset 0 1px 3px rgba(31,42,68,.13), 0 4px 14px rgba(72,91,140,.08); }

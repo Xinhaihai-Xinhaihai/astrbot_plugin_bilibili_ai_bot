@@ -233,7 +233,7 @@ const MOCK_FIELDS = {
   SPECIAL_FOLLOW_FIXED_TIMES: ["【特别关注】固定触发时间", "list", ["09:20", "19:40"]],
   ENABLE_BANGUMI: ["【番剧】启用番剧功能", "bool", true],
   BANGUMI_PROACTIVE: ["【番剧】允许主动追番", "bool", true],
-  BANGUMI_POOLS: ["【番剧】追番列表", "list", ["夏目友人帐", "葬送的芙莉莲"]],
+  BANGUMI_POOLS: ["【番剧】番剧来源池", "list", ["trending", "timeline"]],
   BANGUMI_EPISODE_COUNT: ["【番剧】每次最多观看集数", "int", 1],
   BANGUMI_CONTINUE_SCORE: ["【番剧】继续观看最低评分", "int", 7],
   BANGUMI_DAILY_LIMIT: ["【番剧】每日最多主动追番次数", "int", 1],
@@ -306,6 +306,10 @@ function buildMock() {
   Object.entries(MOCK_FIELDS).forEach(([key, [description, type, defaultValue, options]]) => {
     schema[key] = { description, type, default: structuredClone(defaultValue), ...(options ? { options } : {}) };
     config[key] = structuredClone(defaultValue);
+  });
+  ["LLM_PROVIDER_ID", "VIDEO_VISION_PROVIDER_ID"].forEach((key) => {
+    Object.assign(schema[key], { options: ["", "chat-main", "vision-main"], option_labels: { "": "跟随 AstrBot 默认", "chat-main": "chat-main（示例对话模型）", "vision-main": "vision-main（示例视觉模型）" } });
+    config[key] = "";
   });
   const previewEvents = [
     { time: "09:20", label: "特别关注", kind: "follow", description: "巡视特别关注用户的新内容" },
@@ -936,14 +940,29 @@ const OPTION_LABELS = {
   SPECIAL_FOLLOW_MODE: { random: "随机时间", fixed: "固定时间" },
   AUTONOMOUS_PLAN_GENERATION_MODE: { after_sleep: "休眠结束后生成", fixed_time: "固定时刻生成" },
   MEMORY_ISOLATION_MODE: { isolated: "严格隔离", safe_share: "安全共享" },
-  ABUSE_ALERT_MODE: { off: "关闭", log: "仅记录日志", qq: "QQ 通知" },
-  DAILY_SUMMARY_MODE: { off: "仅存档", qq: "发送到 QQ", bili: "发布到 B 站", both: "QQ + B 站" },
-  WEB_SEARCH_BACKEND: { tavily: "Tavily", perplexity: "Perplexity", bocha: "博查", custom: "自定义接口" },
-  VIDEO_VISION_FORMAT: { none: "截帧分析", gemini: "Gemini 视频接口", qwen: "通义千问视频接口" },
+  ABUSE_ALERT_MODE: { off: "关闭", score: "按好感度变化判断", model: "再用模型确认" },
+  DAILY_SUMMARY_MODE: { archive: "只写进记忆", qq: "QQ 私聊发给主人", dynamic: "发成 B站动态", both: "QQ + B站动态" },
+  WEEKLY_SUMMARY_MODE: { qq: "QQ 私聊发给主人", dynamic: "发成 B站动态", both: "QQ + B站动态" },
+  VIDEO_VISUAL_ANALYSIS_POLICY: { when_text_insufficient: "文字信息不足时才看画面", always: "每次都看画面" },
+  IMAGE_GEN_BACKEND: { openai: "OpenAI 兼容接口", novelai: "NovelAI" },
+  WEB_SEARCH_BACKEND: { tavily: "Tavily", firecrawl: "Firecrawl", grok: "Grok", perplexity: "Perplexity", bocha: "博查", custom: "自定义接口" },
+  VIDEO_VISION_FORMAT: { auto: "自动探测", openai: "OpenAI video_url", file: "OpenAI file", qwen: "通义千问 / vLLM", gemini: "Gemini 兼容层", none: "不直读，只截帧" },
 };
 
-function optionLabel(key, option) {
-  return OPTION_LABELS[key]?.[option] || option;
+// 只能从固定几项里选的列表配置，用勾选代替逐行手填。
+const LIST_CHOICES = {
+  BANGUMI_POOLS: { trending: "热度排行", timeline: "当季新番" },
+};
+
+function optionLabel(key, option, field = state.schema[key]) {
+  return field?.option_labels?.[option] ?? OPTION_LABELS[key]?.[option] ?? option;
+}
+
+function renderListChoices(key, value, label) {
+  const selected = new Set(Array.isArray(value) ? value.map(String) : []);
+  const choices = { ...LIST_CHOICES[key] };
+  selected.forEach((item) => { if (!(item in choices)) choices[item] = item; });
+  return `<div class="list-choices" data-list-choices="${key}" role="group" aria-label="${esc(label)}">${Object.entries(choices).map(([option, text]) => `<label class="list-choice"><input type="checkbox" data-list-choice="${key}" value="${esc(option)}" ${selected.has(option) ? "checked" : ""} /><span>${esc(text)}</span></label>`).join("")}</div>`;
 }
 
 function renderControl(key, field = {}, compact = false) {
@@ -954,8 +973,14 @@ function renderControl(key, field = {}, compact = false) {
     return `<label class="switch-control"><input data-config-key="${key}" type="checkbox" ${value ? "checked" : ""} /><span class="switch-track"><i></i></span><span class="sr-only">切换${esc(label)}</span></label>`;
   }
   if (field.options?.length) {
-    return `<select class="input" data-config-key="${key}" aria-label="${esc(label)}">${field.options.map((option) => `<option value="${esc(option)}" ${String(value) === String(option) ? "selected" : ""}>${esc(optionLabel(key, option))}</option>`).join("")}</select>`;
+    // 已保存但不在列表里的值（比如 AstrBot 里删掉的模型）也要显示出来，不能被悄悄换掉。
+    const options = field.options.map(String);
+    const current = value ?? "";
+    const extraLabel = field._special === "select_provider" && String(current).toLowerCase() === "default" ? "跟随 AstrBot 默认（旧写法 default）" : `${current || "未设置"}（当前值，不在列表中）`;
+    const extra = options.includes(String(current)) ? "" : `<option value="${esc(current)}" selected>${esc(extraLabel)}</option>`;
+    return `<select class="input" data-config-key="${key}" aria-label="${esc(label)}">${extra}${options.map((option) => `<option value="${esc(option)}" ${String(current) === option ? "selected" : ""}>${esc(optionLabel(key, option, field))}</option>`).join("")}</select>`;
   }
+  if (type === "list" && LIST_CHOICES[key]) return renderListChoices(key, value, label);
   if (/^FIXED_.*_TIMES$/.test(key) || key === "SPECIAL_FOLLOW_FIXED_TIMES") return renderTimeList(key, value, label);
   if (key === "SLEEP_START" || key === "SLEEP_END" || (/_HOUR$/.test(key) && num(field.min, 0) === 0 && num(field.max, 23) === 23)) {
     const hour = clamp(num(value), 0, 23);
@@ -2059,6 +2084,12 @@ function renderAllConfig() {
 }
 
 function bindConfigControls(root = content) {
+  root.querySelectorAll("[data-list-choices]").forEach((group) => {
+    const key = group.dataset.listChoices;
+    group.querySelectorAll("[data-list-choice]").forEach((box) => box.addEventListener("change", () => {
+      setDraft(key, [...group.querySelectorAll("[data-list-choice]:checked")].map((item) => item.value));
+    }));
+  });
   root.querySelectorAll("[data-config-key]").forEach((control) => {
     const key = control.dataset.configKey;
     const field = state.schema[key] || {};
