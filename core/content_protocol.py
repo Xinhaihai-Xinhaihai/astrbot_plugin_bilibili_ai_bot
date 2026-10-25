@@ -97,6 +97,32 @@ def parse_share_reaction(raw: str) -> dict[str, Any]:
     return {"decision": decision, "text": text}
 
 
+def parse_memory_evaluation(raw: str, expected_ids) -> dict[str, int]:
+    """Importance scores keyed by rpid; any malformed item rejects the batch.
+
+    A memory the model leaves out is simply absent from the result, so the
+    caller keeps it rather than guessing a score.
+    """
+    value = _object(raw)
+    if set(value) != {"items"} or not isinstance(value["items"], list):
+        raise ContentProtocolError("memory_evaluation_schema_mismatch")
+    expected = {str(item) for item in expected_ids}
+    scores: dict[str, int] = {}
+    for item in value["items"]:
+        if not isinstance(item, dict) or set(item) != {"rpid", "importance"}:
+            raise ContentProtocolError("memory_evaluation_item_mismatch")
+        rpid = item["rpid"]
+        if not isinstance(rpid, str) or rpid not in expected:
+            raise ContentProtocolError("memory_evaluation_unknown_rpid")
+        if rpid in scores:
+            raise ContentProtocolError("memory_evaluation_duplicate_rpid")
+        importance = item["importance"]
+        if isinstance(importance, bool) or not isinstance(importance, int) or not 1 <= importance <= 10:
+            raise ContentProtocolError("memory_evaluation_invalid_importance")
+        scores[rpid] = importance
+    return scores
+
+
 DYNAMIC_IMAGE_CHOICES = {"none", "generate", "video_cover"}
 
 
