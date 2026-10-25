@@ -166,7 +166,7 @@ class ShareSendCleanupTests(unittest.TestCase):
 
     def test_cleanup_includes_send_copies(self):
         source = (CORE / "share.py").read_text(encoding="utf-8")
-        finally_idx = source.index("finally:", source.index("_handle_bili_share"))
+        finally_idx = source.index("finally:", source.index("async def _send_shared_video"))
         tail = source[finally_idx : finally_idx + 900]
         self.assertIn("list(send_paths)", tail)
         self.assertIn("list(raw_send_paths)", tail)

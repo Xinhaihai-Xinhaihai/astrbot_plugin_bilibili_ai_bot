@@ -69,6 +69,7 @@ class ConfigSchemaOrderTests(unittest.TestCase):
             "BILI_SHARE_PARSE_MAX_VIDEO_MB",
             "BILI_SHARE_PARSE_VIDEO_MAX_HEIGHT",
             "BILI_SHARE_PARSE_COOLDOWN",
+            "BILI_SHARE_PARSE_AUTO_WATCH",
         ])
 
     def test_video_memory_switch_precedes_lifecycle_windows(self):

@@ -231,7 +231,7 @@ class MemoryMixin:
         )
         return True
 
-    def _legacy_seen_video_records(self):
+    def _legacy_seen_video_records(self, include_ledger=True):
         """Collect all old, possibly capped sources for one-time permanent import."""
         records = []
 
@@ -289,7 +289,7 @@ class MemoryMixin:
             external_memory.items() if isinstance(external_memory, dict) else []
         ):
             add(bvid, item, "external_memory")
-        seen_backup = self._load_json(SEEN_VIDEOS_FILE, {})
+        seen_backup = self._load_json(SEEN_VIDEOS_FILE, {}) if include_ledger else {}
         for bvid, item in (
             seen_backup.items() if isinstance(seen_backup, dict) else []
         ):
@@ -299,11 +299,85 @@ class MemoryMixin:
                 add(item.get("bvid"), item, "semantic_memory")
         return records
 
+    @staticmethod
+    def _is_unmarked_share_preview(item):
+        """Old QQ parse cards were saved as video memories without a watch flag."""
+        return (
+            isinstance(item, dict)
+            and item.get("memory_type") == "video"
+            and "content_analyzed" not in item
+            and str(item.get("thread_id") or "").startswith(("group_share:", "private_share:"))
+        )
+
+    async def _repair_share_preview_seen_records(self):
+        """Forget seen marks that only came from QQ parse cards, then flag those cards.
+
+        A BV keeps its mark when any real watch evidence remains, or when the
+        ledger entry was written by an actual watch rather than a legacy import.
+        """
+        previews = [item for item in self._memory if self._is_unmarked_share_preview(item)]
+        if not previews:
+            return 0
+        for item in previews:
+            item["content_analyzed"] = False
+        # A cache hit could copy the card into the video cache as if it were a
+        # summary, and that hit then marked the BV as watched.
+        video_cache = self._load_json(VIDEO_MEMORY_FILE, {})
+        if not isinstance(video_cache, dict):
+            video_cache = {}
+        copied = {
+            bvid for bvid, item in video_cache.items()
+            if isinstance(item, dict) and item.get("source") == "semantic_memory" and (
+                str(item.get("thread_id") or "").startswith(("group_share:", "private_share:"))
+                or "有人分享了B站视频" in str(item.get("summary") or item.get("analysis") or "")
+            )
+        }
+        if copied:
+            for bvid in copied:
+                video_cache.pop(bvid, None)
+            self._save_json(VIDEO_MEMORY_FILE, video_cache)
+        watched = {
+            item.get("bvid")
+            for item in self._legacy_seen_video_records(include_ledger=False)
+        }
+        import_sources = {"", "bilibili", "semantic_memory", "legacy"}
+        candidates = ({
+            "BV" + str(item.get("bvid"))[2:]
+            for item in previews
+            if str(item.get("bvid") or "")[:2].lower() == "bv"
+        } | copied) - watched
+        ledger = self._load_json(SEEN_VIDEOS_FILE, {})
+        if not isinstance(ledger, dict):
+            ledger = {}
+        layered = getattr(self, "layered_runtime", None)
+        stale = set()
+        for bvid in candidates:
+            entry = ledger.get(bvid) if isinstance(ledger.get(bvid), dict) else None
+            if entry is None and layered is not None and layered.is_open:
+                entry = await layered.seen_videos.get(bvid)
+                if entry is not None:
+                    entry = {"source": entry.get("last_source", "")}
+            if bvid in copied or entry is None or str(entry.get("source") or "") in import_sources:
+                stale.add(bvid)
+        if stale:
+            for bvid in stale:
+                ledger.pop(bvid, None)
+            self._save_json(SEEN_VIDEOS_FILE, ledger)
+            if layered is not None and layered.is_open:
+                await layered.seen_videos.forget(stale)
+        await self._replace_memory_snapshot()
+        logger.info(
+            f"[BiliBot] 已修正 {len(previews)} 条 QQ 解析卡记忆，"
+            f"移除 {len(stale)} 条误记的观看痕迹"
+        )
+        return len(stale)
+
     async def _initialize_seen_videos(self):
         """Idempotently migrate every legacy BV source into the permanent ledger."""
         layered = getattr(self, "layered_runtime", None)
         if layered is None or not layered.is_open:
             return 0
+        await self._repair_share_preview_seen_records()
         records = self._legacy_seen_video_records()
         created = await layered.seen_videos.import_many(records)
         total = await layered.seen_videos.count()

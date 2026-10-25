@@ -137,6 +137,20 @@ class ToolExecutionSecurityTests(unittest.TestCase):
         self.assertIn("BV1test", result)
         self.plugin.search_bilibili_videos.assert_awaited_once()
 
+    def test_ordinary_group_user_can_watch_a_public_video(self):
+        self.plugin._watch_video_and_save_memory = AsyncMock(
+            return_value={"ok": True, "message": "已完成视频分析", "bvid": "BV1test"}
+        )
+        result = run(
+            self.tools["watch_video"].call(
+                tool_context(FakeEvent(group="777")), bvid="BV1test"
+            )
+        )
+        self.assertIn("已完成视频分析", result)
+        self.plugin._watch_video_and_save_memory.assert_awaited_once_with(
+            "BV1test", memory_source="tool_watch", force_rewatch=False
+        )
+
     def test_group_user_cannot_read_memory_or_following_data(self):
         event = FakeEvent(group="777")
         recalled = run(

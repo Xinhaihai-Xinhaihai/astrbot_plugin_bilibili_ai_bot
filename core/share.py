@@ -14,6 +14,11 @@ from .network import plugin_http_session
 from astrbot.api import logger
 
 from .config import TEMP_VIDEO_DIR, VIDEO_MEMORY_FILE
+from .content_protocol import (
+    ContentProtocolError, SHARE_REACTION_SCHEMA_PROMPT, SHARE_WATCH_SCHEMA_PROMPT,
+    parse_share_reaction, parse_share_watch_decision,
+)
+from .security.redact import wrap_untrusted
 
 
 class ShareMixin:
@@ -501,6 +506,7 @@ class ShareMixin:
         for key in self._share_context_keys(event):
             self._recent_group_share_context[key] = record
         logger.debug(f"[BiliBot] recent group share context remembered: {record.get('title','')[:30]} {bvid}")
+        return record
 
     def _get_recent_group_share_prompt(self, event):
         ctx = getattr(self, "_recent_group_share_context", None)
@@ -523,15 +529,28 @@ class ShareMixin:
                 if self._recent_group_share_context.get(key) is record:
                     self._recent_group_share_context.pop(key, None)
         desc_excerpt = (record.get('desc') or '')[:260]
-        return (
-            f"【上一条{scene}背景：B站视频分享】\n"
-            "刚才这个会话里解析过一个B站视频。用户如果说\"这个视频\"\"刚才那个\"\"有链接的话\"\"这个UP\"等指代，优先理解为下面这条：\n"
+        facts = (
             f"- 标题：{record.get('title') or '未知'}\n"
             f"- BV号：{record.get('bvid') or '未知'}\n"
             f"- UP主：{record.get('owner_name') or '未知'}（UID:{record.get('owner_mid') or '?'}）\n"
             f"- 分区：{record.get('tname') or '未知'} | 时长：{record.get('duration') or '?'}\n"
             f"- 链接：{record.get('link') or ''}\n"
-            f"- 简介：{desc_excerpt}\n"
+            f"- 简介：{desc_excerpt}"
+        )
+        watched = str(record.get("watched_summary") or "").strip()
+        if watched:
+            facts += f"\n- 你看完后记下的内容：{watched}"
+            watch_note = "你已经看过这个视频，聊内容时以记下的内容为准。"
+        else:
+            watch_note = (
+                "你还没看过这个视频的内容，只知道标题和简介；不要假装看过。"
+                "需要了解内容时可以调用 watch_video 观看。"
+            )
+        return (
+            f"【上一条{scene}背景：B站视频分享】\n"
+            "刚才这个会话里解析过一个B站视频。用户如果说\"这个视频\"\"刚才那个\"\"有链接的话\"\"这个UP\"等指代，优先理解为下面这条：\n"
+            f"{wrap_untrusted(facts, 'shared_video')}\n"
+            f"{watch_note}\n"
             "如果用户问这个UP最近有什么视频，可以用UP主UID或名字调用B站查询/搜索工具。"
         )
 
@@ -645,7 +664,7 @@ class ShareMixin:
             return
 
         intro = self._share_video_intro(info)
-        self._remember_recent_group_share(event, info, intro)
+        share_record = self._remember_recent_group_share(event, info, intro)
         yield event.plain_result(self._build_share_card_text(info, intro))
 
         share_source, share_scene = self._share_scene(event)
@@ -653,9 +672,26 @@ class ShareMixin:
             f"{share_source}:{bvid}",
             f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {share_scene}有人分享了B站视频《{info.get('title','')}》，UP:{info.get('owner_name','')}，简介:{intro[:180]}",
             memory_type="video",
-            extra={"bvid": bvid, "owner_mid": str(info.get("owner_mid", "")), "owner_name": info.get("owner_name", ""), "video_title": info.get("title", ""), "tname": info.get("tname", "")},
+            # 解析卡只来自标题和简介，不是观看记录；不能进入已看账本或被当成视频内容。
+            extra={"bvid": bvid, "owner_mid": str(info.get("owner_mid", "")), "owner_name": info.get("owner_name", ""), "video_title": info.get("title", ""), "tname": info.get("tname", ""), "content_analyzed": False},
         )
 
+        # 看不看由 Bot 自己决定，和下载发送并行；评价要等视频发出后才能引用它。
+        reply_target = asyncio.get_running_loop().create_future()
+        self._start_share_reaction(event, info, share_record, reply_target)
+        sent_message_id = None
+        try:
+            async for result in self._send_shared_video(event, bvid):
+                if isinstance(result, dict):
+                    sent_message_id = result.get("message_id") or sent_message_id
+                else:
+                    yield result
+        finally:
+            if not reply_target.done():
+                reply_target.set_result(sent_message_id or self._event_message_id(event))
+
+    async def _send_shared_video(self, event, bvid):
+        """Download and send the original video; a dict result reports its message id."""
         if not self.config.get("BILI_SHARE_PARSE_SEND_VIDEO", True):
             return
         if not self._find_command("yt-dlp"):
@@ -685,15 +721,23 @@ class ShareMixin:
                 components.append(comp)
             # 单段直接发；多段用一个聊天记录合集，每个节点仅含视频，不能混入文字。
             if len(components) == 1:
-                yield event.chain_result(components)
+                chain = components
             else:
                 forward = self._share_forward_component(event, components)
-                if forward is not None:
-                    yield event.chain_result([forward])
+                chain = [forward] if forward is not None else None
+            if chain is None:
+                yield event.plain_result("当前适配器不支持视频聊天记录合集，改为逐段发送。")
+                for comp in components:
+                    yield event.chain_result([comp])
+            else:
+                handled, message_id = await self._send_onebot_chain(event, chain[0])
+                if handled:
+                    if message_id is None:
+                        yield event.plain_result(f"原视频没发出去，先看链接吧： https://www.bilibili.com/video/{bvid}")
+                    elif message_id:
+                        yield {"message_id": message_id}
                 else:
-                    yield event.plain_result("当前适配器不支持视频聊天记录合集，改为逐段发送。")
-                    for comp in components:
-                        yield event.chain_result([comp])
+                    yield event.chain_result(chain)
             if skipped:
                 yield event.plain_result("后面还有内容，我先按配置发到这里；想多发可以调大 BILI_SHARE_PARSE_MAX_SEGMENTS。")
         finally:
@@ -707,6 +751,221 @@ class ShareMixin:
                 self._share_cleanup_tasks = getattr(self, "_share_cleanup_tasks", set())
                 self._share_cleanup_tasks.add(task)
                 task.add_done_callback(self._share_cleanup_tasks.discard)
+
+    @staticmethod
+    def _event_message_id(event):
+        message_id = getattr(getattr(event, "message_obj", None), "message_id", None)
+        return str(message_id) if message_id not in (None, "") else None
+
+    async def _send_onebot_chain(self, event, component):
+        """Send one media component through OneBot so its message id can be quoted.
+
+        Returns ``(handled, message_id)``. ``handled`` is False when the adapter is
+        not OneBot, so the caller falls back to the normal AstrBot send path. Once a
+        send was attempted it is never retried, because it may already have arrived;
+        a failed send reports ``None`` and a send without a returned id reports "".
+        """
+        bot = getattr(event, "bot", None)
+        call_action = getattr(bot, "call_action", None)
+        try:
+            platform = str(event.get_platform_name() or "").lower()
+        except Exception:
+            platform = ""
+        if platform != "aiocqhttp" or not callable(call_action):
+            return False, None
+        try:
+            group_id = str(event.get_group_id() or "").strip()
+            target = {"group_id": int(group_id)} if group_id else {"user_id": int(event.get_sender_id())}
+            if getattr(component, "type", "") in ("nodes", "node") or type(component).__name__ in ("Nodes", "Node"):
+                payload = component.to_dict()
+                if asyncio.iscoroutine(payload):
+                    payload = await payload
+                action = "send_group_forward_msg" if group_id else "send_private_forward_msg"
+                params = {**payload, **target}
+            else:
+                convert = getattr(type(event), "_from_segment_to_dict", None)
+                segment = convert(component) if callable(convert) else component.to_dict()
+                if asyncio.iscoroutine(segment):
+                    segment = await segment
+                action = "send_group_msg" if group_id else "send_private_msg"
+                params = {**target, "message": [segment]}
+        except Exception as exc:
+            logger.debug(f"[BiliBot] 无法直接构造 OneBot 视频消息，改用普通发送: {exc}")
+            return False, None
+        try:
+            ret = await call_action(action, **params)
+        except Exception as exc:
+            logger.warning(f"[BiliBot] 分享视频发送失败: {exc}")
+            return True, None
+        message_id = ret.get("message_id") if isinstance(ret, dict) else None
+        return True, str(message_id) if message_id not in (None, "") else ""
+
+    def _start_share_reaction(self, event, info, share_record, reply_target):
+        if not self.config.get("BILI_SHARE_PARSE_AUTO_WATCH", True):
+            return
+        task = asyncio.create_task(self._react_to_shared_video(
+            str(getattr(event, "unified_msg_origin", "") or ""),
+            info,
+            share_record,
+            reply_target,
+            scene=self._share_scene(event)[1],
+            user_text=str(getattr(event, "message_str", "") or ""),
+        ))
+        self._share_reaction_tasks = getattr(self, "_share_reaction_tasks", set())
+        self._share_reaction_tasks.add(task)
+        task.add_done_callback(self._share_reaction_tasks.discard)
+
+    async def _qq_session_provider_id(self, umo):
+        """The chat model this QQ conversation is currently using."""
+        getter = getattr(self.context, "get_current_chat_provider_id", None)
+        if callable(getter):
+            try:
+                provider_id = getter(umo=umo)
+                if asyncio.iscoroutine(provider_id):
+                    provider_id = await provider_id
+                if provider_id:
+                    return str(provider_id)
+            except Exception as exc:
+                logger.debug(f"[BiliBot] 读取当前会话模型失败: {exc}")
+        getter = getattr(self.context, "get_using_provider", None)
+        if callable(getter):
+            for kwargs in ({"umo": umo}, {}):
+                try:
+                    provider = getter(**kwargs)
+                    meta = provider.meta() if provider is not None else None
+                    if getattr(meta, "id", None):
+                        return str(meta.id)
+                except TypeError:
+                    continue
+                except Exception as exc:
+                    logger.debug(f"[BiliBot] 读取当前会话模型失败: {exc}")
+                    break
+        return ""
+
+    async def _qq_session_persona_prompt(self, umo):
+        """The persona of this QQ conversation: its selected persona, else the default."""
+        personas = getattr(self.context, "persona_manager", None)
+        conversations = getattr(self.context, "conversation_manager", None)
+        persona_id = None
+        try:
+            cid = await conversations.get_curr_conversation_id(umo)
+            conversation = await conversations.get_conversation(umo, cid) if cid else None
+            persona_id = getattr(conversation, "persona_id", None)
+        except Exception as exc:
+            logger.debug(f"[BiliBot] 读取当前会话人格失败: {exc}")
+        if persona_id == "[%None]":
+            return ""
+        if persona_id:
+            try:
+                persona = await personas.get_persona(persona_id)
+                prompt = getattr(persona, "system_prompt", None)
+                if prompt is None and isinstance(persona, dict):
+                    prompt = persona.get("prompt")
+                if prompt:
+                    return str(prompt).strip()
+            except Exception as exc:
+                logger.debug(f"[BiliBot] 读取会话人格 {persona_id} 失败: {exc}")
+        try:
+            persona = await personas.get_default_persona_v3(umo=umo)
+        except TypeError:
+            persona = await personas.get_default_persona_v3()
+        except Exception as exc:
+            logger.debug(f"[BiliBot] 读取默认人格失败: {exc}")
+            return ""
+        prompt = persona.get("prompt") if isinstance(persona, dict) else getattr(persona, "prompt", "")
+        return str(prompt or "").strip()
+
+    async def _decide_share_watch(self, info, *, scene, user_text, persona, provider_id):
+        video = {
+            "title": info.get("title", ""),
+            "up": info.get("owner_name", ""),
+            "partition": info.get("tname", ""),
+            "duration": self._format_duration(info.get("duration", 0)),
+            "desc": self._share_video_intro(info),
+        }
+        prompt = (
+            f"有人在QQ{scene}里分享了一个B站视频，解析卡和原视频已经发出来了。"
+            "现在由你决定自己要不要点开看。\n"
+            f"{wrap_untrusted(json.dumps(video, ensure_ascii=False), 'shared_video')}\n"
+        )
+        if user_text.strip():
+            prompt += f"分享时的消息：\n{wrap_untrusted(user_text[:300], 'share_message')}\n"
+        prompt += "看视频要花些时间；只是没兴趣也完全可以不看。\n" + SHARE_WATCH_SCHEMA_PROMPT
+        raw = await self._llm_call(prompt, system_prompt=persona, max_tokens=60, provider_id=provider_id)
+        if not raw:
+            return False
+        try:
+            return parse_share_watch_decision(raw)["decision"] == "watch"
+        except ContentProtocolError as exc:
+            logger.warning(f"[BiliBot] 分享视频观看决定结构校验失败，不看: {exc}")
+            return False
+
+    async def _share_reaction_text(self, watch_message, *, scene, persona, provider_id):
+        prompt = (
+            f"你看完了对方在QQ{scene}里分享的这个B站视频，要引用这条视频随口评价一句。\n"
+            f"{wrap_untrusted(watch_message[:1600], 'watch_result')}\n"
+            "只说一句，基于真正看到的内容；不复述标题，不带链接，不提分析、评分这些内部过程。\n"
+            + SHARE_REACTION_SCHEMA_PROMPT
+        )
+        raw = await self._llm_call(prompt, system_prompt=persona, max_tokens=120, provider_id=provider_id)
+        if not raw:
+            return ""
+        try:
+            parsed = parse_share_reaction(raw)
+        except ContentProtocolError as exc:
+            logger.warning(f"[BiliBot] 分享视频评价结构校验失败，保持沉默: {exc}")
+            return ""
+        return parsed["text"] if parsed["decision"] == "comment" else ""
+
+    async def _react_to_shared_video(self, umo, info, share_record, reply_target, *, scene, user_text):
+        """Decide to watch a parsed share; if watched, quote the sent video with one remark."""
+        bvid = str(info.get("bvid", "") or "")
+        try:
+            provider_id = await self._qq_session_provider_id(umo)
+            if not provider_id:
+                logger.info("[BiliBot] 找不到当前 QQ 会话的聊天模型，跳过分享视频观看")
+                return
+            persona = await self._qq_session_persona_prompt(umo)
+            # 看过且记得内容就不用再决定；只剩“看过但忘了”的痕迹时不重看也不评价。
+            if not self._cached_video_memory(bvid):
+                if await self._has_seen_video(bvid):
+                    return
+                if not await self._decide_share_watch(
+                    info, scene=scene, user_text=user_text, persona=persona, provider_id=provider_id
+                ):
+                    logger.info(f"[BiliBot] 分享视频决定不看：{bvid}")
+                    return
+            result = await self._watch_video_and_save_memory(bvid, memory_source="qq_share")
+            if not result.get("ok") or result.get("seen_only"):
+                return
+            cached = self._cached_video_memory(bvid) or {}
+            if isinstance(share_record, dict):
+                share_record["watched_summary"] = str(
+                    cached.get("summary") or cached.get("analysis") or ""
+                )[:260]
+            text = await self._share_reaction_text(
+                result.get("message", ""), scene=scene, persona=persona, provider_id=provider_id
+            )
+            if not text:
+                return
+            try:
+                reply_to = await asyncio.wait_for(asyncio.shield(reply_target), timeout=1800)
+            except asyncio.TimeoutError:
+                reply_to = None
+            await self._send_share_reaction(umo, text, reply_to)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[BiliBot] 分享视频观看/评价失败: {exc}")
+
+    async def _send_share_reaction(self, umo, text, reply_to):
+        import astrbot.api.message_components as Comp
+        from astrbot.api.event import MessageChain
+
+        chain = [Comp.Plain(text)]
+        if reply_to:
+            chain.insert(0, Comp.Reply(id=str(reply_to)))
+        await self.context.send_message(umo, MessageChain(chain))
 
 
 
