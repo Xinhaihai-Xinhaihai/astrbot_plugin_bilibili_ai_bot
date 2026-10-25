@@ -1413,7 +1413,16 @@ const GUIDE_STEPS = [
     done: () => Boolean(String(currentValue("OWNER_MID") ?? "").trim()),
     body: ["在同一页底部填写主人的 B站 UID 和称呼。", "主人身份用于私信推荐、评论区 @主人，以及安全的跨平台记忆共享校验；不填也能运行，但这些功能找不到人。"] },
   { id: "model", icon: "settings", title: "确认人设和模型", page: "basics", action: "打开基础设置", done: () => null,
-    body: ["“基础设置 → 人设与模型”里可以选回复用的模型，留空就跟随 AstrBot 默认模型。", "默认沿用 AstrBot 自带人设；想让 B站上的语气不一样，可以在附加系统提示词里补充。看视频、搜索、图片等高级能力也在这一页，用到时再配。"] },
+    body: ["“基础设置 → 人设与模型”里可以选回复用的模型，留空就跟随 AstrBot 默认模型。", "默认沿用 AstrBot 自带人设；想让 B站上的语气不一样，可以在附加系统提示词里补充。接下来三步是同一页里的记忆、图片和视频模型。"] },
+  { id: "embedding", icon: "memory-card", title: "配置记忆 Embedding", page: "basics", search: "EMBED_", action: "去填写",
+    done: () => Boolean(String(currentValue("EMBED_API_KEY") ?? "").trim()),
+    body: ["Embedding 把记忆变成向量，Bot 才能按意思想起相关的事，而不只是按关键词硬匹配。不填也能运行，但记忆召回会粗很多。", "在“基础设置 → Embedding 与记忆”里填三项：API Key、API Base URL（兼容 OpenAI 接口的服务地址，只填根地址也行，插件会自动补 /v1）、模型名称（默认 BAAI/bge-m3）。它和聊天模型无关，可以用另一家服务。"] },
+  { id: "image-vision", icon: "sun", title: "配置图片识别", page: "basics", search: "IMAGE_VISION_", action: "去填写",
+    done: () => Boolean(currentValue("IMAGE_VISION_PROVIDER_ID") || (String(currentValue("IMAGE_VISION_API_KEY") ?? "").trim() && String(currentValue("IMAGE_VISION_MODEL") ?? "").trim())),
+    body: ["配好后 Bot 能看懂评论和私信里的图片；不配就会直接忽略图片。", "两种填法选一种：在“图片识别使用的 AstrBot 模型提供商”里选一个支持看图的模型；或者填独立的 API Key、API Base URL 和模型名称。两种都填时优先用 AstrBot 模型，失败再退回独立 API。"] },
+  { id: "video-vision", icon: "video", title: "配置视频分析", page: "basics", search: "VIDEO_VISION_", action: "去填写",
+    done: () => Boolean(currentValue("VIDEO_VISION_PROVIDER_ID") || (String(currentValue("VIDEO_VISION_API_KEY") ?? "").trim() && String(currentValue("VIDEO_VISION_MODEL") ?? "").trim())),
+    body: ["主动看视频、看分享的视频时用。没配视觉模型也能“看”，但只能读标题、简介、字幕和热评，看不到画面。", "填法和图片识别一样：选一个支持看图或看视频的 AstrBot 模型，或者填独立 API。“视频直读的接口格式”不确定就选“自动探测”，选错也不会出错，会自动退回截帧。看画面需要服务器装好 yt-dlp 和 ffmpeg。"] },
   { id: "reply", icon: "message", title: "打开评论和私信回复", page: "interaction", action: "去回复与互动",
     done: () => Boolean(currentValue("ENABLE_REPLY") || currentValue("ENABLE_PRIVATE_MESSAGES")),
     body: ["“回复与互动”页决定 Bot 回不回、回谁、多快回。先打开评论自动回复，私信回复按需开启。", "内容筛选和兴趣选择会先挡掉广告、复读和没什么可说的消息，不是每条都必须回。很多子选项要先打开对应总开关才会出现。"] },
@@ -1466,7 +1475,7 @@ function renderGuideCard() {
     <div class="guide-progress" aria-hidden="true"><i style="width:${progress.total ? progress.done / progress.total * 100 : 0}%"></i></div>
     <ol class="guide-steps">${GUIDE_STEPS.filter((step) => step.page).map((step) => {
       const done = step.done();
-      return `<li class="guide-step ${done ? "is-done" : done === false ? "is-todo" : ""}"><span class="guide-step-icon">${icon(done ? "trophy" : step.icon)}</span><div><strong>${esc(step.title)}</strong><small>${done === null ? "说明" : done ? "已完成" : "待完成"}</small></div><button class="guide-step-go" data-guide-page="${step.page}" type="button">${esc(step.action)}${icon("arrow-right")}</button></li>`;
+      return `<li class="guide-step ${done ? "is-done" : done === false ? "is-todo" : ""}"><span class="guide-step-icon">${icon(done ? "trophy" : step.icon)}</span><div><strong>${esc(step.title)}</strong><small>${done === null ? "说明" : done ? "已完成" : "待完成"}</small></div><button class="guide-step-go" data-guide-step="${step.id}" type="button">${esc(step.action)}${icon("arrow-right")}</button></li>`;
     }).join("")}</ol>
   </section>`;
 }
@@ -1504,11 +1513,18 @@ function openGuide(index = null) {
     modalRoot.querySelectorAll("[data-guide-jump]").forEach((node) => node.addEventListener("click", () => go(num(node.dataset.guideJump))));
     modalRoot.querySelector("[data-guide-prev]")?.addEventListener("click", () => go(current - 1));
     modalRoot.querySelector("[data-guide-next]")?.addEventListener("click", () => (last ? close() : go(current + 1)));
-    modalRoot.querySelector("[data-guide-goto]")?.addEventListener("click", (event) => { const page = event.currentTarget.dataset.guideGoto; close(); navigate(page); });
+    modalRoot.querySelector("[data-guide-goto]")?.addEventListener("click", () => { close(); openGuideTarget(step); });
     modalRoot.querySelector("[data-guide-next]")?.focus({ preventScroll: true });
   };
   document.addEventListener("keydown", onKey);
   draw();
+}
+
+// 基础设置的项很多，带 search 的步骤直接把搜索框填好，打开就是要填的那一组。
+function openGuideTarget(step) {
+  if (step.search && step.page === "basics") state.settingsSearch = step.search;
+  if (state.currentPage === step.page) renderCurrentPage();
+  else navigate(step.page);
 }
 
 // 只在第一次打开、且账号或主人还没配好时自动弹出一次。
@@ -2345,7 +2361,7 @@ function bindContent() {
   if (state.currentPage === "autonomy") bindRingInteractions();
   content.querySelectorAll("[data-action]").forEach((node) => node.addEventListener("click", () => handleAction(node.dataset.action, node)));
   content.querySelectorAll("[data-page-target]").forEach((node) => node.addEventListener("click", () => navigate(node.dataset.pageTarget)));
-  content.querySelectorAll("[data-guide-page]").forEach((node) => node.addEventListener("click", () => navigate(node.dataset.guidePage)));
+  content.querySelectorAll("[data-guide-step]").forEach((node) => node.addEventListener("click", () => openGuideTarget(GUIDE_STEPS.find((step) => step.id === node.dataset.guideStep))));
   content.querySelectorAll("[data-plan-mode]").forEach((node) => node.addEventListener("click", () => {
     const autonomous = node.dataset.planMode === "autonomous";
     if (Boolean(currentValue("ENABLE_AUTONOMOUS_DAILY_PLAN")) === autonomous) return;
