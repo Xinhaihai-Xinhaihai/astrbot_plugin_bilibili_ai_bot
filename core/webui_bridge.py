@@ -888,9 +888,50 @@ async def handle_available_tools(plugin: Any):
         return _failure(str(exc), 500)
 
 
+def _provider_choices(plugin: Any) -> list[tuple[str, str]]:
+    """Chat providers configured in AstrBot, as (id, label) pairs."""
+    getter = getattr(getattr(plugin, "context", None), "get_all_providers", None)
+    if not callable(getter):
+        return []
+    choices = []
+    for provider in getter() or []:
+        try:
+            meta = provider.meta()
+        except Exception:
+            continue
+        provider_id = str(getattr(meta, "id", "") or "").strip()
+        if not provider_id:
+            continue
+        model = str(getattr(meta, "model", "") or "").strip()
+        choices.append((provider_id, f"{provider_id}（{model}）" if model and model != provider_id else provider_id))
+    return choices
+
+
+def _schema_with_choices(plugin: Any) -> dict[str, dict[str, Any]]:
+    """Fill AstrBot's dynamic `select_provider` fields with real dropdown options.
+
+    Saving still validates against the static schema, so a provider removed from
+    AstrBot later does not make the stored value unsavable.
+    """
+    schema = _load_schema()
+    try:
+        providers = _provider_choices(plugin)
+    except Exception as exc:
+        logger.warning(f"[BiliBot WebUI] provider list failed: {exc}")
+        providers = []
+    if not providers:
+        return schema
+    for field in schema.values():
+        if field.get("_special") != "select_provider":
+            continue
+        field["options"] = [""] + [provider_id for provider_id, _ in providers]
+        field["option_labels"] = {"": "跟随 AstrBot 默认", **dict(providers)}
+    return schema
+
+
 async def handle_get_config_schema(plugin: Any):
     try:
-        return _response(_load_schema())
+        return _response(_schema_with_choices(plugin))
     except Exception as exc:
         logger.exception(f"[BiliBot WebUI] schema failed: {exc}")
         return _failure(str(exc), 500)
