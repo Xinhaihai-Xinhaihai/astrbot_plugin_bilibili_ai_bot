@@ -111,10 +111,11 @@ const PAGE_KEYS = {
     "PROACTIVE_FAV", "PROACTIVE_FAV_MIN_SCORE", "PROACTIVE_COMMENT", "PROACTIVE_COMMENT_MIN_SCORE",
     "PROACTIVE_FOLLOW", "PROACTIVE_FOLLOW_MIN_SCORE",
     "CUSTOM_PROACTIVE_INSTRUCTION", "ENABLE_OWNER_RECOMMEND", "RECOMMEND_OWNER_DELIVERY", "RECOMMEND_OWNER_MIN_SCORE",
-    "RECOMMEND_OWNER_DAILY_LIMIT", "RECOMMEND_OWNER_MIN_GAP_MINUTES", "CUSTOM_RECOMMEND_INSTRUCTION", "OWNER_QQ_UMO", "ENABLE_CROSS_PLATFORM_ACTIVITY_STATUS", "VIDEO_VISUAL_ANALYSIS_POLICY", "ENABLE_VIDEO_LONG_TERM_MEMORY", "VIDEO_MEMORY_DETAIL_DAYS", "VIDEO_MEMORY_FADE_DAYS", "SPECIAL_FOLLOW_ENABLED", "SPECIAL_FOLLOW_MODE",
-    "SPECIAL_FOLLOW_TIMES_COUNT", "SPECIAL_FOLLOW_FIXED_TIMES", "ENABLE_BANGUMI", "BANGUMI_PROACTIVE",
+    "RECOMMEND_OWNER_DAILY_LIMIT", "RECOMMEND_OWNER_MIN_GAP_MINUTES", "CUSTOM_RECOMMEND_INSTRUCTION", "OWNER_QQ_UMO", "ENABLE_CROSS_PLATFORM_ACTIVITY_STATUS", "VIDEO_VISUAL_ANALYSIS_POLICY", "ENABLE_VIDEO_LONG_TERM_MEMORY", "VIDEO_MEMORY_DETAIL_DAYS", "VIDEO_MEMORY_FADE_DAYS", "SPECIAL_FOLLOW_ENABLED",
+    "SPECIAL_FOLLOW_TIMES_COUNT", "ENABLE_BANGUMI", "BANGUMI_PROACTIVE",
     "BANGUMI_POOLS", "BANGUMI_EPISODE_COUNT", "BANGUMI_CONTINUE_SCORE", "BANGUMI_DAILY_LIMIT",
     "BANGUMI_COMMENT", "BANGUMI_AUTO_FOLLOW", "ENABLE_DYNAMIC", "DYNAMIC_TIMES_COUNT", "DYNAMIC_DAILY_COUNT", "DYNAMIC_MIN_INTERVAL_DAYS",
+    "DYNAMIC_POST_CHANCE", "DYNAMIC_FROM_VIDEO", "DYNAMIC_WEB_SEARCH_MAX", "DYNAMIC_PROMPT",
     "DYNAMIC_TOPICS", "CUSTOM_DYNAMIC_INSTRUCTION",
     "ENABLE_DYNAMIC_WATCH", "DYNAMIC_WATCH_TIMES_COUNT", "DYNAMIC_WATCH_DAILY_LIMIT",
     "DYNAMIC_WATCH_SPECIAL_ONLY", "DYNAMIC_WATCH_INCLUDE_VIDEO_POSTS", "DYNAMIC_WATCH_INTEREST_PROMPT",
@@ -228,9 +229,7 @@ const MOCK_FIELDS = {
   CUSTOM_DYNAMIC_INSTRUCTION: ["【动态发布】动态补充提示词", "text", "像真实用户一样分享，不要固定模板。"],
   DYNAMIC_DAILY_COUNT: ["【动态发布】每天最多发几条动态", "int", 2],
   SPECIAL_FOLLOW_ENABLED: ["【特别关注】启用定时特关巡视", "bool", true],
-  SPECIAL_FOLLOW_MODE: ["【特别关注】触发方式", "string", "random", ["random", "fixed"]],
-  SPECIAL_FOLLOW_TIMES_COUNT: ["【特别关注】每日巡视次数", "int", 2],
-  SPECIAL_FOLLOW_FIXED_TIMES: ["【特别关注】固定触发时间", "list", ["09:20", "19:40"]],
+  SPECIAL_FOLLOW_TIMES_COUNT: ["【特别关注】自主计划每日最多巡视次数", "int", 2],
   ENABLE_BANGUMI: ["【番剧】启用番剧功能", "bool", true],
   BANGUMI_PROACTIVE: ["【番剧】允许主动追番", "bool", true],
   BANGUMI_POOLS: ["【番剧】番剧来源池", "list", ["trending", "timeline"]],
@@ -585,6 +584,7 @@ function setDraft(key, value) {
   if (JSON.stringify(value) === JSON.stringify(state.config[key])) state.dirtyKeys.delete(key);
   else state.dirtyKeys.add(key);
   updateSaveDock();
+  applyFieldConditions();
 }
 
 function toast(title, message = "", type = "success") {
@@ -647,8 +647,9 @@ function renderSidebar() {
   const running = state.stats.running !== false;
   const accountReady = state.stats.account_connected || state.account?.logged_in;
   const modeExtensions = availableModeExtensions();
-  sidebar.innerHTML = `<div class="sidebar-brand"><div class="brand-mark"><img src="${esc(brandLogoUrl)}" alt="BiliBot" /></div><div class="brand-copy"><strong>BiliBot</strong><span>控制中心</span></div>${renderModeEntry(modeExtensions)}</div><div class="sidebar-state" aria-label="服务状态"><span class="status-dot ${running ? "is-online" : ""}"></span><div><strong>${running ? "服务运行中" : "服务未运行"}</strong><span>${accountReady ? "账号链路已配置" : "等待连接账号"}</span></div></div><div class="nav-label">管理</div><nav class="nav-list">${NAV_ITEMS.map(([id, iconName, label, hint]) => `<button class="nav-item ${state.currentPage === id ? "is-active" : ""}" data-page="${id}" type="button" title="${esc(hint)}" aria-current="${state.currentPage === id ? "page" : "false"}">${icon(iconName, "nav-icon")}<span>${esc(label)}</span>${id === "basics" && state.dirtyKeys.size ? `<b class="nav-badge">${state.dirtyKeys.size}</b>` : ""}</button>`).join("")}</nav>`;
+  sidebar.innerHTML = `<div class="sidebar-brand"><div class="brand-mark"><img src="${esc(brandLogoUrl)}" alt="BiliBot" /></div><div class="brand-copy"><strong>BiliBot</strong><span>控制中心</span></div>${renderModeEntry(modeExtensions)}</div><div class="sidebar-state" aria-label="服务状态"><span class="status-dot ${running ? "is-online" : ""}"></span><div><strong>${running ? "服务运行中" : "服务未运行"}</strong><span>${accountReady ? "账号链路已配置" : "等待连接账号"}</span></div></div><div class="nav-label">管理</div><nav class="nav-list">${NAV_ITEMS.map(([id, iconName, label, hint]) => `<button class="nav-item ${state.currentPage === id ? "is-active" : ""}" data-page="${id}" type="button" title="${esc(hint)}" aria-current="${state.currentPage === id ? "page" : "false"}">${icon(iconName, "nav-icon")}<span>${esc(label)}</span>${id === "basics" && state.dirtyKeys.size ? `<b class="nav-badge">${state.dirtyKeys.size}</b>` : ""}</button>`).join("")}</nav>${renderGuideEntry()}`;
   sidebar.querySelectorAll("[data-page]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.page)));
+  sidebar.querySelector("[data-open-guide]")?.addEventListener("click", () => { closeMobileNav(); openGuide(); });
   sidebar.querySelector("[data-enter-extension]")?.addEventListener("click", (event) => enterExtension(event.currentTarget.dataset.enterExtension));
   sidebar.querySelector("[data-open-mode-picker]")?.addEventListener("click", openModePicker);
   sidebar.querySelector("[data-popout-extension]")?.addEventListener("click", (event) => openExtensionStandalone(event.currentTarget.dataset.popoutExtension));
@@ -1000,20 +1001,55 @@ function renderControl(key, field = {}, compact = false) {
   return `<div class="input-with-action"><input class="input" data-config-key="${key}" type="${inputType}" value="${esc(value ?? "")}" aria-label="${esc(label)}" />${isSensitive(key) ? `<button class="inline-icon-button" data-action="toggle-secret" type="button" aria-label="显示或隐藏${esc(label)}">${icon("unlock")}</button>` : ""}</div>`;
 }
 
+// schema 的 condition：依赖的开关或模式不满足时，这一项不起作用，跟 AstrBot 原生面板一样先藏起来。
+function fieldConditionMet(key) {
+  const condition = state.schema[key]?.condition;
+  if (!condition || typeof condition !== "object") return true;
+  return Object.entries(condition).every(([dep, expected]) => !hasKey(dep) || currentValue(dep) === expected);
+}
+
+// 整组都被条件藏起来时，说明缺的是哪个开关；依赖项可能在别的页面，只写“打开上方开关”会让人找不到。
+// 只列整组共同缺的条件：个别项另外依赖的模式（比如“固定时刻生成”）不该混进总提示里。
+function hiddenReason(keys) {
+  const unmet = (key) => Object.entries(state.schema[key]?.condition || {}).filter(([dep, expected]) => hasKey(dep) && currentValue(dep) !== expected);
+  const lists = keys.map(unmet).filter((list) => list.length);
+  if (!lists.length) return "";
+  const common = lists[0].filter(([dep]) => lists.every((list) => list.some(([other]) => other === dep)));
+  const labels = (common.length ? common : lists[0]).map(([dep, expected]) => {
+    const label = descriptionMeta(state.schema[dep]).label;
+    return typeof expected === "boolean" ? `${expected ? "开启" : "关闭"}「${label}」` : `把「${label}」选为 ${optionLabel(dep, String(expected))}`;
+  });
+  return `这些设置当前不生效，需要先${labels.join("、")}。`;
+}
+
+function applyFieldConditions() {
+  [content, modalRoot].forEach((root) => {
+    root.querySelectorAll("[data-field-key]").forEach((node) => { node.hidden = !fieldConditionMet(node.dataset.fieldKey); });
+    root.querySelectorAll(".field-stack").forEach((stack) => {
+      const fields = [...stack.querySelectorAll(":scope > [data-field-key]")];
+      const allHidden = fields.length > 0 && fields.every((node) => node.hidden);
+      stack.classList.toggle("is-all-hidden", allHidden);
+      stack.dataset.hiddenReason = allHidden ? hiddenReason(fields.map((node) => node.dataset.fieldKey)) : "";
+    });
+  });
+}
+
 function renderField(key, options = {}) {
   if (!hasKey(key) || state.schema[key]?.deprecated) return "";
   const field = state.schema[key] || {};
   const meta = descriptionMeta(field);
   const isBool = field.type === "bool";
-  return `<div class="config-field ${isBool ? "is-switch" : ""} ${options.tile ? "is-tile" : ""}">
+  return `<div class="config-field ${isBool ? "is-switch" : ""} ${options.tile ? "is-tile" : ""}" data-field-key="${key}" ${fieldConditionMet(key) ? "" : "hidden"}>
     <div class="field-copy"><label>${esc(options.label || meta.label)}</label>${field.hint ? `<p>${esc(field.hint)}</p>` : options.hint ? `<p>${esc(options.hint)}</p>` : ""}</div>
     <div class="field-control">${renderControl(key, field, options.compact)}</div>
   </div>`;
 }
 
 function renderFields(keys, className = "field-stack", options = {}) {
-  const html = keys.map((key) => renderField(key, options)).filter(Boolean).join("");
-  return html ? `<div class="${className}">${html}</div>` : `<div class="empty-inline">当前版本没有这些配置项</div>`;
+  const shown = keys.filter((key) => hasKey(key) && !state.schema[key]?.deprecated);
+  const html = shown.map((key) => renderField(key, options)).join("");
+  const allHidden = shown.length > 0 && shown.every((key) => !fieldConditionMet(key));
+  return html ? `<div class="${className}${allHidden ? " is-all-hidden" : ""}" data-hidden-reason="${allHidden ? esc(hiddenReason(shown)) : ""}">${html}</div>` : `<div class="empty-inline">当前版本没有这些配置项</div>`;
 }
 
 function renderConfigSection(title, subtitle, keys, iconName = "settings", extra = "", className = "") {
@@ -1364,6 +1400,123 @@ function renderPage(page) {
   }[page]?.() || renderOverview();
 }
 
+// 新手引导：done 返回 true/false 的步骤按真实状态打勾，返回 null 的只是说明，不计进度。
+const GUIDE_STORAGE = { seen: "bilibot.guide.seen", dismissed: "bilibot.guide.dismissed" };
+
+const GUIDE_STEPS = [
+  { id: "welcome", icon: "house", title: "欢迎使用 BiliBot", page: null, done: () => null,
+    body: ["BiliBot 会用你的 B站账号回复评论和私信、按日程主动看视频，并记住和大家的互动。", "左侧每个页面管一类功能：总览看运行状态，账号连接负责登录，回复与互动、自主与作息、安全与工具分别管对应行为。接下来几步按推荐顺序带你配一遍，随时可以关掉，之后点左侧“新手引导”再打开。"] },
+  { id: "account", icon: "user", title: "扫码连接 B站账号", page: "account", action: "去扫码",
+    done: () => Boolean(state.account?.logged_in || state.stats.account_connected),
+    body: ["在“账号连接”页用 B站 App 扫码并点确认登录，凭据只保存在插件里，不会显示在页面上。", "建议用单独的账号，Bot 的所有回复和主动行为都会以这个账号发出。"] },
+  { id: "owner", icon: "heart", title: "告诉 Bot 谁是主人", page: "account", action: "填写主人身份",
+    done: () => Boolean(String(currentValue("OWNER_MID") ?? "").trim()),
+    body: ["在同一页底部填写主人的 B站 UID 和称呼。", "主人身份用于私信推荐、评论区 @主人，以及安全的跨平台记忆共享校验；不填也能运行，但这些功能找不到人。"] },
+  { id: "model", icon: "settings", title: "确认人设和模型", page: "basics", action: "打开基础设置", done: () => null,
+    body: ["“基础设置 → 人设与模型”里可以选回复用的模型，留空就跟随 AstrBot 默认模型。", "默认沿用 AstrBot 自带人设；想让 B站上的语气不一样，可以在附加系统提示词里补充。看视频、搜索、图片等高级能力也在这一页，用到时再配。"] },
+  { id: "reply", icon: "message", title: "打开评论和私信回复", page: "interaction", action: "去回复与互动",
+    done: () => Boolean(currentValue("ENABLE_REPLY") || currentValue("ENABLE_PRIVATE_MESSAGES")),
+    body: ["“回复与互动”页决定 Bot 回不回、回谁、多快回。先打开评论自动回复，私信回复按需开启。", "内容筛选和兴趣选择会先挡掉广告、复读和没什么可说的消息，不是每条都必须回。很多子选项要先打开对应总开关才会出现。"] },
+  { id: "autonomy", icon: "clock", title: "安排作息和主动行为", page: "autonomy", action: "去自主与作息",
+    done: () => hasEventCreatingCapability(),
+    body: ["“自主与作息”页设置休眠时间、今日活跃度，以及主动看视频、发动态、追番等能力。", "能力卡片上的“详细设置”里是具体参数；“当天计划生成方式”可以让 Bot 自己排日程，也可以按你填的准确时刻执行。这里的数字都是上限，不是必须完成的目标。"] },
+  { id: "security", icon: "shield", title: "检查安全边界", page: "security", action: "去安全与工具",
+    done: () => currentValue("BILI_TOOL_ISOLATION_ENABLED") !== false,
+    body: ["B站上的评论和私信都按不可信输入处理。“安全与工具”页默认隔离 B站端和 AstrBot/QQ 的工具权限，建议保持开启。", "记忆隔离、恶意告警和自动拉黑也在这一页。"] },
+  { id: "save", icon: "save", title: "保存修改，随时查找", page: "allconfig", action: "看看全部配置", done: () => null,
+    body: ["改动不会立刻生效：页面底部会出现保存栏，点“保存修改”才会写入，不想要了就点“放弃”。", "找不到某个设置时，去“全部配置”页按名称、说明或 KEY 搜索，所有配置项都在那里。"] },
+];
+
+function guideStore(key, value) {
+  try {
+    if (value === undefined) return window.localStorage.getItem(key);
+    window.localStorage.setItem(key, value);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function guideProgress() {
+  const tracked = GUIDE_STEPS.map((step) => step.done()).filter((done) => done !== null);
+  return { done: tracked.filter(Boolean).length, total: tracked.length };
+}
+
+function guideStatusPill(step) {
+  const done = step.done();
+  if (done === null) return statusPill("说明", "neutral");
+  return done ? statusPill("已完成", "green") : statusPill("待完成", "orange");
+}
+
+function renderGuideEntry() {
+  const progress = guideProgress();
+  const badge = progress.done < progress.total ? `<b class="nav-badge">${progress.done}/${progress.total}</b>` : "";
+  return `<button class="nav-item guide-entry" data-open-guide type="button" title="按推荐顺序完成首次配置">${icon("trophy", "nav-icon")}<span>新手引导</span>${badge}</button>`;
+}
+
+function renderGuideCard() {
+  if (guideStore(GUIDE_STORAGE.dismissed) === "1") return "";
+  const progress = guideProgress();
+  const allDone = progress.done === progress.total;
+  const title = allDone ? "上手清单已完成" : "新手上手清单";
+  const subtitle = allDone ? "基础配置都到位了，可以隐藏这张卡片；需要时点左侧“新手引导”重新打开。" : `已完成 ${progress.done} / ${progress.total} 项，按顺序配置最省事`;
+  const actions = `<div class="guide-card-actions">${button("分步引导", "open-guide", "arrow-right", allDone ? "soft" : "primary")}${button("隐藏", "dismiss-guide", "arrow-left", "soft")}</div>`;
+  return `<section class="card guide-card ${allDone ? "is-complete" : ""}">
+    ${sectionHead(title, subtitle, "trophy", actions)}
+    <div class="guide-progress" aria-hidden="true"><i style="width:${progress.total ? progress.done / progress.total * 100 : 0}%"></i></div>
+    <ol class="guide-steps">${GUIDE_STEPS.filter((step) => step.page).map((step) => {
+      const done = step.done();
+      return `<li class="guide-step ${done ? "is-done" : done === false ? "is-todo" : ""}"><span class="guide-step-icon">${icon(done ? "trophy" : step.icon)}</span><div><strong>${esc(step.title)}</strong><small>${done === null ? "说明" : done ? "已完成" : "待完成"}</small></div><button class="guide-step-go" data-guide-page="${step.page}" type="button">${esc(step.action)}${icon("arrow-right")}</button></li>`;
+    }).join("")}</ol>
+  </section>`;
+}
+
+function openGuide(index = null) {
+  guideStore(GUIDE_STORAGE.seen, "1");
+  const firstTodo = GUIDE_STEPS.findIndex((step) => step.done() === false);
+  let current = index ?? Math.max(0, firstTodo);
+  const returnFocus = document.activeElement;
+  const close = () => {
+    modalRoot.innerHTML = "";
+    document.removeEventListener("keydown", onKey);
+    if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+  };
+  const go = (next) => { current = clamp(next, 0, GUIDE_STEPS.length - 1); draw(); };
+  const onKey = (event) => {
+    if (event.key === "Escape") close();
+    else if (event.key === "ArrowRight") go(current + 1);
+    else if (event.key === "ArrowLeft") go(current - 1);
+  };
+  const draw = () => {
+    const step = GUIDE_STEPS[current];
+    const last = current === GUIDE_STEPS.length - 1;
+    modalRoot.innerHTML = `<div class="modal-backdrop guide-backdrop" data-guide-backdrop><section class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+      <header><span>新手引导 · ${current + 1} / ${GUIDE_STEPS.length}</span><button class="modal-close" data-guide-close type="button" aria-label="关闭引导">×</button></header>
+      <nav class="guide-dots" aria-label="引导步骤">${GUIDE_STEPS.map((item, i) => `<button class="${i === current ? "is-active" : ""} ${item.done() ? "is-done" : ""}" data-guide-jump="${i}" type="button" aria-label="第 ${i + 1} 步：${esc(item.title)}" aria-current="${i === current ? "step" : "false"}"></button>`).join("")}</nav>
+      <div class="guide-body"><span class="guide-icon">${icon(step.icon)}</span><div class="guide-title-row"><h2 id="guide-title">${esc(step.title)}</h2>${guideStatusPill(step)}</div>${step.body.map((text) => `<p>${esc(text)}</p>`).join("")}</div>
+      <footer>
+        ${step.page ? `<button class="button soft" data-guide-goto="${step.page}" type="button">${esc(step.action)}${icon("arrow-right")}</button>` : "<span></span>"}
+        <div><button class="button soft" data-guide-prev type="button" ${current === 0 ? "disabled" : ""}>上一步</button><button class="button primary" data-guide-next type="button">${last ? "完成" : "下一步"}</button></div>
+      </footer>
+    </section></div>`;
+    modalRoot.querySelectorAll("[data-guide-close]").forEach((node) => node.addEventListener("click", close));
+    modalRoot.querySelector("[data-guide-backdrop]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) close(); });
+    modalRoot.querySelectorAll("[data-guide-jump]").forEach((node) => node.addEventListener("click", () => go(num(node.dataset.guideJump))));
+    modalRoot.querySelector("[data-guide-prev]")?.addEventListener("click", () => go(current - 1));
+    modalRoot.querySelector("[data-guide-next]")?.addEventListener("click", () => (last ? close() : go(current + 1)));
+    modalRoot.querySelector("[data-guide-goto]")?.addEventListener("click", (event) => { const page = event.currentTarget.dataset.guideGoto; close(); navigate(page); });
+    modalRoot.querySelector("[data-guide-next]")?.focus({ preventScroll: true });
+  };
+  document.addEventListener("keydown", onKey);
+  draw();
+}
+
+// 只在第一次打开、且账号或主人还没配好时自动弹出一次。
+function shouldAutoOpenGuide() {
+  if (guideStore(GUIDE_STORAGE.seen) === "1" || guideStore(GUIDE_STORAGE.dismissed) === "1") return false;
+  return GUIDE_STEPS.some((step) => (step.id === "account" || step.id === "owner") && step.done() === false);
+}
+
 function renderOverview() {
   const s = state.stats || {};
   const warning = (s.warnings || [])[0] || { level: "success", title: "未发现重大问题", detail: "当前没有需要立即处理的异常。" };
@@ -1376,6 +1529,7 @@ function renderOverview() {
   const replyLimit = Math.max(1, num(currentValue("AUTONOMOUS_REPLY_DAILY_MAX"), 80));
   const privateLimit = Math.max(1, num(currentValue("AUTONOMOUS_PRIVATE_DAILY_MAX"), 30));
   return `${pageHead("MONITOR", "运行总览", "最重要的账号、调度、互动、安全与配额状态集中在这里。", button("刷新状态", "refresh", "refresh"))}
+    ${renderGuideCard()}
     <section class="health-hero ${isHealthy ? "is-healthy" : "has-warning"}">
       <div class="health-orb">${icon(isHealthy ? "shield" : "lightning")}</div>
       <div class="health-copy"><span>${isHealthy ? "SYSTEM HEALTHY" : "ATTENTION NEEDED"}</span><h2>${esc(warning.title)}</h2><p>${esc(warning.detail)}</p></div>
@@ -1465,10 +1619,10 @@ function renderInterestSnapshot() {
 }
 
 function renderInterestConfigSection() {
-  const keys = ["INTEREST_APPLY_TO_PRIVATE", "INTEREST_SELECTION_PROMPT", "CUSTOM_REPLY_INSTRUCTION"].filter(hasKey);
+  const keys = ["FILTER_LOW_VALUE_MESSAGES", "FILTER_DUPLICATE_MESSAGES", "FILTER_AD_MESSAGES", "INTEREST_APPLY_TO_PRIVATE", "INTEREST_SELECTION_PROMPT", "CUSTOM_REPLY_INSTRUCTION"].filter(hasKey);
   if (!keys.length) return "";
   return `<section class="card section-card interest-config-card">
-    ${sectionHead("兴趣选择与评论提示词", "总开关、当前兴趣和回复提示词集中在这里", "star")}
+    ${sectionHead("内容筛选与兴趣选择", "先做确定性过滤，再按兴趣挑选；当前兴趣和回复提示词也在这里", "star")}
     <div class="interest-config-layout">
       <div class="interest-config-controls">
         <div class="interest-selector-row">
@@ -1484,10 +1638,7 @@ function renderInterestConfigSection() {
 
 function renderInteraction() {
   return `${pageHead("INTERACTION", "回复与互动", "把值得回应的内容挑出来，再用明确的频率、冷却和硬上限保护账号。", statusPill(`${fmt(state.stats.filtered_today)} 条已过滤`, "green"))}
-    <div class="two-column">
-      ${renderConfigSection("内容筛选", "先做确定性过滤，再执行兴趣判断", ["FILTER_LOW_VALUE_MESSAGES", "FILTER_DUPLICATE_MESSAGES", "FILTER_AD_MESSAGES"], "shield")}
-      ${renderConfigSection("回复边界", "概率保留为最后一道节奏控制", ["ENABLE_REPLY", "REPLY_PROBABILITY_PERCENT", "REPLY_COOLDOWN", "POLL_INTERVAL", "REPLY_ALWAYS_UIDS", "ENABLE_SIMILAR_SKIP", "REPLY_SIMILARITY_PERCENT"], "controller")}
-    </div>
+    ${renderConfigSection("回复边界", "概率保留为最后一道节奏控制", ["ENABLE_REPLY", "REPLY_PROBABILITY_PERCENT", "REPLY_COOLDOWN", "POLL_INTERVAL", "REPLY_ALWAYS_UIDS", "ENABLE_SIMILAR_SKIP", "REPLY_SIMILARITY_PERCENT"], "controller")}
     ${renderInterestConfigSection()}
     ${renderConfigSection("回复前自主查询", "一个总开关控制搜索、简介、字幕、热评和视频核查；按已配置能力使用。/bili测试查询 BV号 可只读实测，/bili日志 查询 查看结果。", ["COMMENT_CONTEXT_ENABLED", "COMMENT_CONTEXT_MAX_CALLS"], "search")}
     <div class="two-column">
@@ -1513,9 +1664,9 @@ const EVENT_STYLES = {
 const AUTONOMY_CAPABILITIES = [
   { id: "plan-generation", title: "每日计划编排", icon: "calendar", toggle: "ENABLE_AUTONOMOUS_DAILY_PLAN", description: "决定由模型安排今天的事件，或切换到管理员固定计划。", keys: ["AUTONOMOUS_PLAN_GENERATION_MODE", "AUTONOMOUS_PLAN_AFTER_SLEEP_MINUTES", "AUTONOMOUS_PLAN_GENERATION_TIME", "AUTONOMOUS_PLAN_RETRY_MINUTES", "AUTONOMOUS_PLAN_MAX_RETRIES", "SCHEDULE_PLAN_PROVIDER_ID", "AUTONOMOUS_PROACTIVE_WINDOW_MINUTES", "AUTONOMOUS_PLAN_PROMPT"] },
   { id: "proactive", title: "主动浏览", icon: "play", toggle: "ENABLE_PROACTIVE", description: "在主动浏览时间段内观看视频，并执行受评分阈值保护的互动。", keys: ["PROACTIVE_TIMES_COUNT", "PROACTIVE_VIDEO_COUNT", "PROACTIVE_DAILY_LIMIT", "PROACTIVE_COMMENT_COUNT", "PROACTIVE_COMMENT_DAILY_LIMIT", "VIDEO_VISUAL_ANALYSIS_POLICY", "ENABLE_VIDEO_LONG_TERM_MEMORY", "VIDEO_MEMORY_DETAIL_DAYS", "VIDEO_MEMORY_FADE_DAYS"] },
-  { id: "dynamic", title: "动态发布", icon: "message", toggle: "ENABLE_DYNAMIC", description: "按今日计划生成并发布 B站动态；时间由固定计划或自主计划统一安排。", keys: ["DYNAMIC_TOPICS", "CUSTOM_DYNAMIC_INSTRUCTION"] },
-  { id: "dynamic-watch", title: "关注动态", icon: "search", toggle: "ENABLE_DYNAMIC_WATCH", description: "查看关注用户的新动态图文与视频投稿，触发节奏由统一日程管理。", keys: ["DYNAMIC_WATCH_DAILY_LIMIT", "DYNAMIC_WATCH_SPECIAL_ONLY", "DYNAMIC_WATCH_INCLUDE_VIDEO_POSTS", "DYNAMIC_WATCH_INTEREST_PROMPT"] },
-  { id: "special-follow", title: "特别关注", icon: "star", toggle: "SPECIAL_FOLLOW_ENABLED", description: "巡视特别关注用户；不在此处重复设置固定时刻或触发次数。", keys: [] },
+  { id: "dynamic", title: "动态发布", icon: "message", toggle: "ENABLE_DYNAMIC", description: "按今日计划生成并发布 B站动态；时间由固定计划或自主计划统一安排。", keys: ["DYNAMIC_TIMES_COUNT", "DYNAMIC_POST_CHANCE", "DYNAMIC_DAILY_COUNT", "DYNAMIC_MIN_INTERVAL_DAYS", "DYNAMIC_FROM_VIDEO", "DYNAMIC_WEB_SEARCH_MAX", "DYNAMIC_TOPICS", "DYNAMIC_PROMPT", "CUSTOM_DYNAMIC_INSTRUCTION"] },
+  { id: "dynamic-watch", title: "关注动态", icon: "search", toggle: "ENABLE_DYNAMIC_WATCH", description: "查看关注用户的新动态图文与视频投稿，触发节奏由统一日程管理。", keys: ["DYNAMIC_WATCH_TIMES_COUNT", "DYNAMIC_WATCH_DAILY_LIMIT", "DYNAMIC_WATCH_SPECIAL_ONLY", "DYNAMIC_WATCH_INCLUDE_VIDEO_POSTS", "DYNAMIC_WATCH_INTEREST_PROMPT"] },
+  { id: "special-follow", title: "特别关注", icon: "star", toggle: "SPECIAL_FOLLOW_ENABLED", description: "巡视特别关注用户的新内容；自主安排时按每日次数排进日程，固定计划时按“准确执行时刻”触发。", keys: ["SPECIAL_FOLLOW_TIMES_COUNT"] },
   { id: "bangumi", title: "番剧日程", icon: "video", toggle: "ENABLE_BANGUMI", description: "番剧是独立日程，不并入主动浏览；需同时开启番剧功能与主动追番，才会在计划和事件环中出现。", keys: ["BANGUMI_PROACTIVE", "BANGUMI_POOLS", "BANGUMI_EPISODE_COUNT", "BANGUMI_CONTINUE_SCORE", "BANGUMI_DAILY_LIMIT", "BANGUMI_COMMENT", "BANGUMI_AUTO_FOLLOW"] },
   { id: "prefilter", title: "内容挑选", icon: "search", toggle: "ENABLE_PROACTIVE_LLM_PREFILTER", description: "用关注源、兴趣提示词和模型预筛选决定今天值得看的内容。", dependency: "依赖主动浏览", keys: ["PROACTIVE_FOLLOW_UIDS", "PROACTIVE_SEARCH_QUERY_PROMPT", "PROACTIVE_TASTE_WINDOW_DAYS", "PROACTIVE_PREFERENCE_HALF_LIFE_DAYS", "PROACTIVE_EXPLORATION_RATIO", "PROACTIVE_VIDEO_POOLS", "PROACTIVE_LLM_PREFILTER_MAX_REJECTS", "CUSTOM_PROACTIVE_INSTRUCTION"] },
   { id: "owner-share", title: "给主人分享", icon: "heart", toggle: "ENABLE_OWNER_RECOMMEND", description: "统一管理给主人推荐与 QQ 当前活动同步；活动状态任务结束后立即清除，不写入长期记忆。", dependency: "依赖主动浏览", keys: ["RECOMMEND_OWNER_DELIVERY", "OWNER_QQ_UMO", "ENABLE_CROSS_PLATFORM_ACTIVITY_STATUS", "RECOMMEND_OWNER_MIN_SCORE", "RECOMMEND_OWNER_DAILY_LIMIT", "RECOMMEND_OWNER_MIN_GAP_MINUTES", "CUSTOM_RECOMMEND_INSTRUCTION"] },
@@ -1776,9 +1927,9 @@ function capabilitySummary(item) {
   if (item.id === "plan-generation") return currentValue("ENABLE_AUTONOMOUS_DAILY_PLAN") ? `每日计划：${currentValue("AUTONOMOUS_PLAN_GENERATION_MODE") === "fixed_time" ? currentValue("AUTONOMOUS_PLAN_GENERATION_TIME") : `休眠后 ${fmt(currentValue("AUTONOMOUS_PLAN_AFTER_SLEEP_MINUTES"))} 分钟`}` : "当前使用固定计划";
   if (item.id === "proactive") return `每天最多 ${fmt(currentValue("PROACTIVE_TIMES_COUNT"))} 轮 · 每轮 ${fmt(currentValue("PROACTIVE_VIDEO_COUNT"))} 个 · 全天视频上限 ${num(currentValue("PROACTIVE_DAILY_LIMIT"), 0) > 0 ? fmt(currentValue("PROACTIVE_DAILY_LIMIT")) : "不限"}`;
   if (item.id === "owner-share") return `个人喜好 ≥ ${fmt(currentValue("RECOMMEND_OWNER_MIN_SCORE"))} 分 · 每天最多 ${fmt(currentValue("RECOMMEND_OWNER_DAILY_LIMIT"))} 次`;
-  if (item.id === "dynamic") return "时间由统一日程管理";
+  if (item.id === "dynamic") return `每天 ${fmt(currentValue("DYNAMIC_TIMES_COUNT"))} 次机会 · 最多发 ${fmt(currentValue("DYNAMIC_DAILY_COUNT"))} 条`;
   if (item.id === "dynamic-watch") return `每天最多 ${fmt(currentValue("DYNAMIC_WATCH_DAILY_LIMIT"))} 次 · 包含视频投稿 ${currentValue("DYNAMIC_WATCH_INCLUDE_VIDEO_POSTS") ? "开启" : "关闭"}`;
-  if (item.id === "special-follow") return "日程统一由自主安排或固定计划管理";
+  if (item.id === "special-follow") return currentValue("ENABLE_AUTONOMOUS_DAILY_PLAN") ? `自主安排每天最多 ${fmt(currentValue("SPECIAL_FOLLOW_TIMES_COUNT"))} 次` : "按固定计划的准确时刻巡视";
   if (item.id === "bangumi") return `${currentValue("BANGUMI_PROACTIVE") ? "主动追番" : "仅启用资料能力"} · 每天最多 ${fmt(currentValue("BANGUMI_DAILY_LIMIT"))} 次`;
   return "模型预筛选已启用";
 }
@@ -1931,9 +2082,9 @@ function renderSecurity() {
     <section class="card section-card tool-access-card">${sectionHead("B站端私信回复工具", "仅供B站私信收到消息后的回复模型按需查询公开信息；与 QQ/AstrBot 聊天工具分开，不会自动执行", "controller")}${renderToolSummary()}</section>
     <div class="two-column">
       ${renderConfigSection("记忆隔离与安全共享", "默认隔离；开启共享后也只向已绑定主人侧提供脱敏摘要", ["MEMORY_ISOLATION_MODE", "ENABLE_SAFE_CROSS_PLATFORM_MEMORY", "ENABLE_PRIVACY_REDACTION", "MEMORY_BLOCKED_PREFIXES", "MEMORY_BLOCKED_KEYWORDS", "CROSS_PLATFORM_MEMORY_PROMPT"], "memory-card")}
-      ${renderConfigSection("私信安全", "链接域名、危险私信与拉黑白名单", ["PRIVATE_MESSAGE_AUTO_BLOCK", "PRIVATE_MESSAGE_BLOCK_WHITELIST_UIDS", "PRIVATE_MESSAGE_TRUSTED_DOMAINS"], "user")}
+      ${renderConfigSection("恶意告警与自动拉黑", "把平台风控与主人通知集中管理", ["ABUSE_ALERT_MODE", "ABUSE_ALERT_QQ_UMO", "ABUSE_ALERT_SCORE_THRESHOLD", "ENABLE_AUTO_BLOCK", "BLOCK_WHITELIST_UIDS", "AUTO_BLOCK_SCORE", "AUTO_BLOCK_NEGATIVE_TIMES"], "lightning")}
     </div>
-    ${renderConfigSection("恶意告警与自动拉黑", "把平台风控与主人通知集中管理", ["ABUSE_ALERT_MODE", "ABUSE_ALERT_QQ_UMO", "ABUSE_ALERT_SCORE_THRESHOLD", "ENABLE_AUTO_BLOCK", "BLOCK_WHITELIST_UIDS", "AUTO_BLOCK_SCORE", "AUTO_BLOCK_NEGATIVE_TIMES"], "lightning")}`;
+    ${renderConfigSection("私信安全", "链接域名、危险私信与拉黑白名单", ["PRIVATE_MESSAGE_AUTO_BLOCK", "PRIVATE_MESSAGE_BLOCK_WHITELIST_UIDS", "PRIVATE_MESSAGE_TRUSTED_DOMAINS"], "user")}`;
 }
 
 function renderAccount() {
@@ -1951,7 +2102,8 @@ const BASIC_KEY_ORDER = {
   "网络代理": ["PROXY_URL"],
   "人设与模型": ["USE_ASTRBOT_PERSONA", "CUSTOM_SYSTEM_PROMPT", "LLM_PROVIDER_ID", "SUMMARY_PROVIDER_ID", "SUMMARY_API_KEY", "SUMMARY_API_BASE", "SUMMARY_MODEL", "GENERATION_PROVIDER_ID", "GENERATION_API_KEY", "GENERATION_API_BASE", "GENERATION_MODEL", "LLM_CIRCUIT_FAILURE_THRESHOLD", "LLM_CIRCUIT_COOLDOWN_SECONDS"],
   "Embedding 与记忆": ["EMBED_API_KEY", "EMBED_API_BASE", "EMBED_MODEL", "EMBED_TIMEOUT_SECONDS"],
-  "视频分析": ["VIDEO_VISION_PROVIDER_ID", "VIDEO_VISION_API_KEY", "VIDEO_VISION_API_BASE", "VIDEO_VISION_MODEL", "VIDEO_VISION_FORMAT", "VIDEO_VISION_FPS"],
+  "视频分析": ["VIDEO_VISION_PROVIDER_ID", "VIDEO_VISION_API_KEY", "VIDEO_VISION_API_BASE", "VIDEO_VISION_MODEL", "VIDEO_VISION_FORMAT", "VIDEO_VISION_FPS", "VIDEO_SEGMENT_MINUTES", "VIDEO_SEGMENT_MAX_COUNT"],
+  "性格演化": ["EVOLVE_MIN_DATA_DAYS", "EVOLVE_WEEKDAY", "EVOLVE_HOUR", "ENABLE_MEME_LEARNING", "EVOLVE_PROMPT"],
   "图片识别": ["IMAGE_VISION_PROVIDER_ID", "IMAGE_VISION_API_KEY", "IMAGE_VISION_API_BASE", "IMAGE_VISION_MODEL"],
   "联网搜索": ["ENABLE_WEB_SEARCH", "WEB_SEARCH_BACKEND", "WEB_SEARCH_API_KEY", "WEB_SEARCH_API_BASE", "WEB_SEARCH_MODEL", "WEB_SEARCH_JUDGE_PROVIDER_ID", "WEB_SEARCH_MAX_RESULTS"],
   "图片生成": ["IMAGE_GEN_BACKEND", "IMAGE_GEN_API_KEY", "IMAGE_GEN_API_BASE", "IMAGE_GEN_MODEL", "IMAGE_GEN_WIDTH", "IMAGE_GEN_HEIGHT", "IMAGE_GEN_STEPS", "IMAGE_GEN_SCALE", "IMAGE_GEN_SAMPLER", "IMAGE_GEN_NEGATIVE_PROMPT"],
@@ -1962,9 +2114,9 @@ function basicGroupFor(key, field) {
   if (key.startsWith("SUMMARY_") || key.startsWith("GENERATION_")) return "人设与模型";
   if (key === "PROXY_URL") return "网络代理";
   if (/人设|模型可靠性/.test(group) || ["LLM_PROVIDER_ID", "USE_ASTRBOT_PERSONA", "CUSTOM_SYSTEM_PROMPT", "LLM_CIRCUIT_FAILURE_THRESHOLD", "LLM_CIRCUIT_COOLDOWN_SECONDS"].includes(key)) return "人设与模型";
-  if (/性格演化/.test(group) || key.startsWith("EVOLVE_")) return "性格演化";
+  if (/演化/.test(group) || key.startsWith("EVOLVE_") || key === "ENABLE_MEME_LEARNING") return "性格演化";
   if (/高级·记忆/.test(group) || key.startsWith("EMBED_")) return "Embedding 与记忆";
-  if (key.startsWith("VIDEO_VISION_") || /视频分析/.test(group)) return "视频分析";
+  if (key.startsWith("VIDEO_VISION_") || key.startsWith("VIDEO_SEGMENT_") || /视频分析/.test(group)) return "视频分析";
   if (key.startsWith("IMAGE_VISION_")) return "图片识别";
   if (/图片生成/.test(group) || key.startsWith("IMAGE_GEN_")) return "图片生成";
   if (/联网搜索/.test(group) || key.startsWith("WEB_SEARCH_")) return "联网搜索";
@@ -2020,7 +2172,7 @@ function renderBasics() {
       const keys = groups[name];
       if (!keys.length) return "";
       const iconName = { "人设与模型": "heart", "性格演化": "star", "Embedding 与记忆": "memory-card", "视频分析": "video", "图片识别": "sun", "图片生成": "sun", "联网搜索": "search", "总结": "calendar", "Cookie 与系统": "settings", "高级接口": "controller" }[name] || "settings";
-      const evolutionToggle = name === "性格演化" && hasKey("ENABLE_PERSONALITY_EVOLUTION") ? `<div class="settings-inline-toggle"><div><strong>旧版每日性格演化</strong><small>实验性功能，建议先关闭并积累几天真实反馈；已有数据会保留。</small></div>${renderControl("ENABLE_PERSONALITY_EVOLUTION", state.schema.ENABLE_PERSONALITY_EVOLUTION)}</div>` : "";
+      const evolutionToggle = name === "性格演化" && hasKey("ENABLE_PERSONALITY_EVOLUTION") ? `<div class="settings-inline-toggle"><div><strong>${esc(descriptionMeta(state.schema.ENABLE_PERSONALITY_EVOLUTION).label)}</strong><small>${esc(state.schema.ENABLE_PERSONALITY_EVOLUTION.hint || "")}</small></div>${renderControl("ENABLE_PERSONALITY_EVOLUTION", state.schema.ENABLE_PERSONALITY_EVOLUTION)}</div>` : "";
       const evolutionKeys = name === "性格演化" ? keys.filter((key) => key !== "ENABLE_PERSONALITY_EVOLUTION") : keys;
       return `<details class="settings-group card" ${query || index < 2 ? "open" : ""}><summary><span class="section-icon">${icon(iconName)}</span><div><strong>${esc(name)}</strong><small>${evolutionKeys.length + (evolutionToggle ? 1 : 0)} 项配置</small></div>${icon("arrow-right")}</summary><div class="settings-group-body"><div class="settings-group-inner">${evolutionToggle}${renderFields(evolutionKeys)}</div></div></details>`;
     }).join("") || `<div class="card empty-search">${icon("search")}<strong>没有匹配的配置</strong><span>换一个关键词试试。</span></div>`}</div>`;
@@ -2193,6 +2345,7 @@ function bindContent() {
   if (state.currentPage === "autonomy") bindRingInteractions();
   content.querySelectorAll("[data-action]").forEach((node) => node.addEventListener("click", () => handleAction(node.dataset.action, node)));
   content.querySelectorAll("[data-page-target]").forEach((node) => node.addEventListener("click", () => navigate(node.dataset.pageTarget)));
+  content.querySelectorAll("[data-guide-page]").forEach((node) => node.addEventListener("click", () => navigate(node.dataset.guidePage)));
   content.querySelectorAll("[data-plan-mode]").forEach((node) => node.addEventListener("click", () => {
     const autonomous = node.dataset.planMode === "autonomous";
     if (Boolean(currentValue("ENABLE_AUTONOMOUS_DAILY_PLAN")) === autonomous) return;
@@ -2313,6 +2466,13 @@ async function handleAction(action, source = null) {
     return;
   }
   if (action === "generate-qr") return generateQr();
+  if (action === "open-guide") return openGuide();
+  if (action === "dismiss-guide") {
+    guideStore(GUIDE_STORAGE.dismissed, "1");
+    renderCurrentPage();
+    toast("已隐藏上手清单", "需要时点左侧“新手引导”重新打开");
+    return;
+  }
   if (action === "regenerate-schedule") {
     const ok = await confirmModal("重新生成今日计划", "这会清空今天尚未完成的日程并立即根据当前活跃度与安全上限重新生成。", "重新生成");
     if (!ok) return;
@@ -2644,6 +2804,7 @@ function init() {
     app.classList.remove("is-booting");
     renderCurrentPage();
     updateSaveDock();
+    if (state.mode === "host" && shouldAutoOpenGuide()) openGuide(0);
   }).catch((error) => {
     content.innerHTML = renderErrorState("无法加载 BiliBot 控制中心", error.message || "请检查 AstrBot 页面权限");
     bindContent();

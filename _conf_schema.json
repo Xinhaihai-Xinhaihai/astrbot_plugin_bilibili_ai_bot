@@ -1185,28 +1185,26 @@
     "hint": "开启后，会按独立时间表巡视特别关注UP主的最新视频"
   },
   "SPECIAL_FOLLOW_MODE": {
-    "description": "【特别关注】触发模式",
+    "description": "【兼容】旧版特别关注触发模式（不再使用）",
     "type": "string",
     "default": "random",
-    "hint": "random=每天随机时间 | fixed=固定时间（需配置SPECIAL_FOLLOW_FIXED_TIMES）",
+    "hint": "新版由“当天计划生成方式”统一安排：自主安排按每日次数，固定计划读取 FIXED_SPECIAL_FOLLOW_TIMES。该字段仅保留旧配置兼容。",
     "options": [
       "random",
       "fixed"
     ],
-    "condition": {
-      "SPECIAL_FOLLOW_ENABLED": true
-    }
+    "invisible": true,
+    "deprecated": true
   },
   "SPECIAL_FOLLOW_TIMES_COUNT": {
-    "description": "【特别关注】每天巡视几次（random模式生效）",
+    "description": "【特别关注】自主计划每日最多巡视次数",
     "type": "int",
     "default": 1,
-    "hint": "随机模式下每天触发的次数",
+    "hint": "每日自主计划里最多安排几次特别关注巡视；固定计划改用“准确执行时刻”。",
     "min": 0,
     "max": 12,
     "condition": {
-      "SPECIAL_FOLLOW_ENABLED": true,
-      "SPECIAL_FOLLOW_MODE": "random"
+      "SPECIAL_FOLLOW_ENABLED": true
     },
     "slider": {
       "min": 1,
@@ -1215,17 +1213,15 @@
     }
   },
   "SPECIAL_FOLLOW_FIXED_TIMES": {
-    "description": "【特别关注】固定触发时间（fixed模式生效）",
+    "description": "【兼容】旧版特别关注固定时间（不再使用）",
     "type": "list",
     "default": [
       "12:00",
       "20:00"
     ],
-    "hint": "格式 HH:MM，如 [\"12:00\", \"20:00\"]",
-    "condition": {
-      "SPECIAL_FOLLOW_ENABLED": true,
-      "SPECIAL_FOLLOW_MODE": "fixed"
-    }
+    "hint": "固定计划已改用 FIXED_SPECIAL_FOLLOW_TIMES（“当天计划生成方式 → 固定计划 → 准确执行时刻”）。该字段仅保留旧配置兼容。",
+    "invisible": true,
+    "deprecated": true
   },
   "ENABLE_BANGUMI": {
     "description": "【番剧·总开关】启用番剧功能（看番、搜番、番剧记忆）",

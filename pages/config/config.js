@@ -71,7 +71,7 @@ function currentValue(key) {
 }
 
 function isVisible(key, field) {
-  if (field.invisible) return false;
+  if (field.invisible || field.deprecated) return false;
   const cond = field.condition;
   if (!cond || typeof cond !== "object") return true;
   for (const [dep, expected] of Object.entries(cond)) {
@@ -110,6 +110,24 @@ function buildControl(key, field) {
     track.className = "track";
     wrap.append(input, track);
     return wrap;
+  }
+
+  if (Array.isArray(field.options) && field.options.length) {
+    // 已保存但不在列表里的值（比如 AstrBot 里删掉的模型）保留为一个选项，不悄悄换掉。
+    const select = document.createElement("select");
+    const options = field.options.map(String);
+    const current = value === null || value === undefined ? "" : String(value);
+    const labels = field.option_labels || {};
+    if (!options.includes(current)) options.unshift(current);
+    for (const option of options) {
+      const node = document.createElement("option");
+      node.value = option;
+      node.textContent = labels[option] ?? (option === current && !field.options.map(String).includes(option) ? `${option || "未设置"}（当前值，不在列表中）` : option);
+      node.selected = option === current;
+      select.append(node);
+    }
+    select.addEventListener("change", () => setDraft(key, select.value));
+    return select;
   }
 
   if (NUMERIC.has(type)) {
@@ -204,7 +222,7 @@ function buildList() {
 
   const buckets = new Map();
   for (const [key, field] of Object.entries(state.schema)) {
-    if (field.invisible) continue;
+    if (field.invisible || field.deprecated) continue;
     const name = groupName(key, field);
     if (!buckets.has(name)) buckets.set(name, []);
     buckets.get(name).push(key);
@@ -266,7 +284,7 @@ function updateVisibility() {
 }
 
 function updateMeta() {
-  const total = Object.keys(state.schema).length;
+  const total = Object.values(state.schema).filter((field) => !field.invisible && !field.deprecated).length;
   const parts = [`${total} 项`, `${state.groups.length} 组`];
   if (state.dirty.size) parts.push(`${state.dirty.size} 处未保存`);
   el.meta.textContent = parts.join(" · ");
