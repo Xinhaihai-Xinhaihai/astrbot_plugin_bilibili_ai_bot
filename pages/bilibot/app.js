@@ -43,6 +43,8 @@ const state = {
   scheduleGesture: null,
   scheduleStats: {},
   memory: {},
+  memoryCleanup: {},
+  memoryCleanupTimer: null,
   profiles: [],
   interest: {},
   security: {},
@@ -337,6 +339,7 @@ function buildMock() {
     },
     scheduleStats: { total: previewEvents.length, completed: previewCompleted, remaining: previewEvents.length - previewCompleted, next: previewNext, minimum_gap_minutes: 45 },
     memory: { total: 1248, comment: 876, private: 192, self: 180, isolation_mode: "isolated", safe_share: false },
+    memoryCleanup: { running: false, pending: 320, share_previews: 12 },
     interest: {
       report: "兴趣预览：暂无真实运行数据；请连接插件后查看。",
       updated_at: "", source: "demo", cached: false, stale: false, read_only: true,
@@ -516,7 +519,7 @@ function unwrap(result) {
 async function apiGet(path, query = {}) {
   if (isPreview) {
     await sleep(70);
-    const map = { "stats": mock.stats, "persona/state": mock.persona, "config/schema": mock.schema, "config": mock.config, "account/info": mock.account, "schedule/today": mock.schedule, "schedule/stats": mock.scheduleStats, "memory/stats": mock.memory, "profiles": mock.profiles, "interest/status": mock.interest, "security/stats": mock.security, "tools/available": mock.availableTools, "cache/stats": mock.cache };
+    const map = { "stats": mock.stats, "persona/state": mock.persona, "config/schema": mock.schema, "config": mock.config, "account/info": mock.account, "schedule/today": mock.schedule, "schedule/stats": mock.scheduleStats, "memory/stats": mock.memory, "memory/cleanup": mock.memoryCleanup, "profiles": mock.profiles, "interest/status": mock.interest, "security/stats": mock.security, "tools/available": mock.availableTools, "cache/stats": mock.cache };
     if (path === "account/qr/generate") return { image: "", key: "preview", expires_in: 180 };
     if (path === "account/qr/poll") return { status: "waiting", message: "预览模式不连接真实账号" };
     if (path === "extensions") return [mockCreatorManifest()];
@@ -531,6 +534,12 @@ async function apiPost(path, body = {}) {
     await sleep(120);
     if (path === "config") Object.assign(mock.config, body);
     if (path === "memory/purge") mock.memory.total = Math.max(0, mock.memory.total - 23);
+    if (path === "memory/cleanup") {
+      const result = { evaluated: mock.memoryCleanup.pending, removed_chat: Math.round(mock.memoryCleanup.pending * 0.4), removed_share_previews: mock.memoryCleanup.share_previews, failed: 0 };
+      mock.memory.total = Math.max(0, mock.memory.total - result.removed_chat - result.removed_share_previews);
+      Object.assign(mock.memoryCleanup, { running: false, pending: 0, share_previews: 0, finished_at: "刚刚", result });
+      return structuredClone(mock.memoryCleanup);
+    }
     if (path === "account/logout") mock.account = { logged_in: false, configured: false, reason: "尚未连接 B站账号" };
     if (path === "schedule/regenerate") return structuredClone(regenerateMockSchedule());
     if (path === "schedule/override") {
@@ -732,8 +741,9 @@ async function refreshPageData(page) {
     state.scheduleStats = scheduleStats || {};
     if (state.selectedScheduleIndex >= (state.schedule.events || []).length) state.selectedScheduleIndex = -1;
   } else if (page === "memory") {
-    const [memory, profiles] = await Promise.all([apiGet("memory/stats"), apiGet("profiles")]);
+    const [memory, profiles, cleanup] = await Promise.all([apiGet("memory/stats"), apiGet("profiles"), apiGet("memory/cleanup").catch(() => ({}))]);
     state.memory = memory || {};
+    state.memoryCleanup = cleanup || {};
     state.profiles = Array.isArray(profiles) ? profiles : [];
   } else if (page === "security") {
     const [security, availableTools] = await Promise.all([apiGet("security/stats"), apiGet("tools/available")]);
@@ -1401,7 +1411,7 @@ function renderPage(page) {
 }
 
 // 新手引导：done 返回 true/false 的步骤按真实状态打勾，返回 null 的只是说明，不计进度。
-const GUIDE_STORAGE = { seen: "bilibot.guide.seen", dismissed: "bilibot.guide.dismissed" };
+const GUIDE_STORAGE = { seen: "bilibot.guide.seen", dismissed: "bilibot.guide.dismissed", step: "bilibot.guide.step", visited: "bilibot.guide.visited" };
 
 const GUIDE_STEPS = [
   { id: "welcome", icon: "house", title: "欢迎使用 BiliBot", page: null, done: () => null,
@@ -1413,16 +1423,7 @@ const GUIDE_STEPS = [
     done: () => Boolean(String(currentValue("OWNER_MID") ?? "").trim()),
     body: ["在同一页底部填写主人的 B站 UID 和称呼。", "主人身份用于私信推荐、评论区 @主人，以及安全的跨平台记忆共享校验；不填也能运行，但这些功能找不到人。"] },
   { id: "model", icon: "settings", title: "确认人设和模型", page: "basics", action: "打开基础设置", done: () => null,
-    body: ["“基础设置 → 人设与模型”里可以选回复用的模型，留空就跟随 AstrBot 默认模型。", "默认沿用 AstrBot 自带人设；想让 B站上的语气不一样，可以在附加系统提示词里补充。接下来三步是同一页里的记忆、图片和视频模型。"] },
-  { id: "embedding", icon: "memory-card", title: "配置记忆 Embedding", page: "basics", search: "EMBED_", action: "去填写",
-    done: () => Boolean(String(currentValue("EMBED_API_KEY") ?? "").trim()),
-    body: ["Embedding 把记忆变成向量，Bot 才能按意思想起相关的事，而不只是按关键词硬匹配。不填也能运行，但记忆召回会粗很多。", "在“基础设置 → Embedding 与记忆”里填三项：API Key、API Base URL（兼容 OpenAI 接口的服务地址，只填根地址也行，插件会自动补 /v1）、模型名称（默认 BAAI/bge-m3）。它和聊天模型无关，可以用另一家服务。"] },
-  { id: "image-vision", icon: "sun", title: "配置图片识别", page: "basics", search: "IMAGE_VISION_", action: "去填写",
-    done: () => Boolean(currentValue("IMAGE_VISION_PROVIDER_ID") || (String(currentValue("IMAGE_VISION_API_KEY") ?? "").trim() && String(currentValue("IMAGE_VISION_MODEL") ?? "").trim())),
-    body: ["配好后 Bot 能看懂评论和私信里的图片；不配就会直接忽略图片。", "两种填法选一种：在“图片识别使用的 AstrBot 模型提供商”里选一个支持看图的模型；或者填独立的 API Key、API Base URL 和模型名称。两种都填时优先用 AstrBot 模型，失败再退回独立 API。"] },
-  { id: "video-vision", icon: "video", title: "配置视频分析", page: "basics", search: "VIDEO_VISION_", action: "去填写",
-    done: () => Boolean(currentValue("VIDEO_VISION_PROVIDER_ID") || (String(currentValue("VIDEO_VISION_API_KEY") ?? "").trim() && String(currentValue("VIDEO_VISION_MODEL") ?? "").trim())),
-    body: ["主动看视频、看分享的视频时用。没配视觉模型也能“看”，但只能读标题、简介、字幕和热评，看不到画面。", "填法和图片识别一样：选一个支持看图或看视频的 AstrBot 模型，或者填独立 API。“视频直读的接口格式”不确定就选“自动探测”，选错也不会出错，会自动退回截帧。看画面需要服务器装好 yt-dlp 和 ffmpeg。"] },
+    body: ["“基础设置 → 人设与模型”里可以选回复用的模型，留空就跟随 AstrBot 默认模型。", "默认沿用 AstrBot 自带人设；想让 B站上的语气不一样，可以在附加系统提示词里补充。记忆、图片和视频模型也在这一页，放在后面的进阶步骤里。"] },
   { id: "reply", icon: "message", title: "打开评论和私信回复", page: "interaction", action: "去回复与互动",
     done: () => Boolean(currentValue("ENABLE_REPLY") || currentValue("ENABLE_PRIVATE_MESSAGES")),
     body: ["“回复与互动”页决定 Bot 回不回、回谁、多快回。先打开评论自动回复，私信回复按需开启。", "内容筛选和兴趣选择会先挡掉广告、复读和没什么可说的消息，不是每条都必须回。很多子选项要先打开对应总开关才会出现。"] },
@@ -1434,57 +1435,100 @@ const GUIDE_STEPS = [
     body: ["B站上的评论和私信都按不可信输入处理。“安全与工具”页默认隔离 B站端和 AstrBot/QQ 的工具权限，建议保持开启。", "记忆隔离、恶意告警和自动拉黑也在这一页。"] },
   { id: "save", icon: "save", title: "保存修改，随时查找", page: "allconfig", action: "看看全部配置", done: () => null,
     body: ["改动不会立刻生效：页面底部会出现保存栏，点“保存修改”才会写入，不想要了就点“放弃”。", "找不到某个设置时，去“全部配置”页按名称、说明或 KEY 搜索，所有配置项都在那里。"] },
+  { id: "embedding", icon: "memory-card", title: "配置记忆 Embedding", level: "advanced", page: "basics", search: "EMBED_", action: "去填写",
+    done: () => Boolean(String(currentValue("EMBED_API_KEY") ?? "").trim()),
+    body: ["Embedding 把记忆变成向量，Bot 才能按意思想起相关的事，而不只是按关键词硬匹配。不填也能运行，但记忆召回会粗很多。", "在“基础设置 → Embedding 与记忆”里填三项：API Key、API Base URL（兼容 OpenAI 接口的服务地址，只填根地址也行，插件会自动补 /v1）、模型名称（默认 BAAI/bge-m3）。它和聊天模型无关，可以用另一家服务。"] },
+  { id: "image-vision", icon: "sun", title: "配置图片识别", level: "advanced", page: "basics", search: "IMAGE_VISION_", action: "去填写",
+    done: () => Boolean(currentValue("IMAGE_VISION_PROVIDER_ID") || (String(currentValue("IMAGE_VISION_API_KEY") ?? "").trim() && String(currentValue("IMAGE_VISION_MODEL") ?? "").trim())),
+    body: ["配好后 Bot 能看懂评论和私信里的图片；不配就会直接忽略图片。", "两种填法选一种：在“图片识别使用的 AstrBot 模型提供商”里选一个支持看图的模型；或者填独立的 API Key、API Base URL 和模型名称。两种都填时优先用 AstrBot 模型，失败再退回独立 API。"] },
+  { id: "video-vision", icon: "video", title: "配置视频分析", level: "advanced", page: "basics", search: "VIDEO_VISION_", action: "去填写",
+    done: () => Boolean(currentValue("VIDEO_VISION_PROVIDER_ID") || (String(currentValue("VIDEO_VISION_API_KEY") ?? "").trim() && String(currentValue("VIDEO_VISION_MODEL") ?? "").trim())),
+    body: ["主动看视频、看分享的视频时用。没配视觉模型也能“看”，但只能读标题、简介、字幕和热评，看不到画面。", "填法和图片识别一样：选一个支持看图或看视频的 AstrBot 模型，或者填独立 API。“视频直读的接口格式”不确定就选“自动探测”，选错也不会出错，会自动退回截帧。看画面需要服务器装好 yt-dlp 和 ffmpeg。"] },
 ];
 
 function guideStore(key, value) {
+  // 插件页可能跑在禁止本地存储的 iframe 里；读写失败就退回内存，至少本次打开期间记得住。
   try {
-    if (value === undefined) return window.localStorage.getItem(key);
+    if (value === undefined) return window.localStorage.getItem(key) ?? guideMemory.get(key) ?? null;
     window.localStorage.setItem(key, value);
-    return value;
   } catch {
-    return null;
+    if (value === undefined) return guideMemory.get(key) ?? null;
   }
+  guideMemory.set(key, value);
+  return value;
 }
 
-function guideProgress() {
-  const tracked = GUIDE_STEPS.map((step) => step.done()).filter((done) => done !== null);
+const guideMemory = new Map();
+
+function guideStepsOf(level) {
+  return GUIDE_STEPS.filter((step) => (step.level || "basic") === level);
+}
+
+function guideProgress(level = "basic") {
+  const tracked = guideStepsOf(level).map((step) => step.done()).filter((done) => done !== null);
   return { done: tracked.filter(Boolean).length, total: tracked.length };
 }
 
 function guideStatusPill(step) {
   const done = step.done();
   if (done === null) return statusPill("说明", "neutral");
-  return done ? statusPill("已完成", "green") : statusPill("待完成", "orange");
+  return done ? statusPill("已完成", "green") : statusPill(step.level === "advanced" ? "可选" : "待完成", "orange");
 }
 
 function renderGuideEntry() {
-  const progress = guideProgress();
+  const progress = guideProgress("basic");
   const badge = progress.done < progress.total ? `<b class="nav-badge">${progress.done}/${progress.total}</b>` : "";
   return `<button class="nav-item guide-entry" data-open-guide type="button" title="按推荐顺序完成首次配置">${icon("trophy", "nav-icon")}<span>新手引导</span>${badge}</button>`;
 }
 
-// 清单只放能打勾的步骤：没完成的给可点的格子，完成的缩成小标签；全部完成就只剩一行，不占总览的地方。
+function guideTile(step) {
+  return `<button class="guide-step" data-guide-step="${step.id}" type="button"><span class="guide-step-icon">${icon(step.icon)}</span><span class="guide-step-copy"><strong>${esc(step.title)}</strong><small>${esc(step.action)}</small></span>${icon("arrow-right")}</button>`;
+}
+
+function guideChip(step, done) {
+  return `<button class="guide-done-chip ${done ? "" : "is-optional"}" data-guide-step="${step.id}" type="button">${icon(step.icon)}${esc(step.title)}</button>`;
+}
+
+// 基础步骤是能跑起来的最低要求；进阶是记忆、图片、视频这些可选能力，分开显示，进阶没配不算没完成。
 function renderGuideCard() {
   if (guideStore(GUIDE_STORAGE.dismissed) === "1") return "";
-  const tracked = GUIDE_STEPS.filter((step) => step.done() !== null);
-  const todo = tracked.filter((step) => !step.done());
-  const done = tracked.filter((step) => step.done());
-  const actions = `<div class="guide-card-actions">${button("分步引导", "open-guide", "arrow-right", todo.length ? "primary" : "soft")}<button class="button soft" data-action="dismiss-guide" type="button">隐藏</button></div>`;
-  if (!todo.length) {
-    return `<section class="card guide-card is-compact"><span class="section-icon">${icon("trophy")}</span><div class="guide-compact-copy"><strong>上手清单已完成</strong><small>${done.length} / ${tracked.length} 项都配好了，需要时点左侧“新手引导”重新打开</small></div>${actions}</section>`;
+  const tracked = (level) => guideStepsOf(level).filter((step) => step.done() !== null);
+  const basic = tracked("basic");
+  const advanced = tracked("advanced");
+  const basicTodo = basic.filter((step) => !step.done());
+  const advancedTodo = advanced.filter((step) => !step.done());
+  const actions = `<div class="guide-card-actions">${button("分步引导", "open-guide", "arrow-right", basicTodo.length ? "primary" : "soft")}<button class="button soft" data-action="dismiss-guide" type="button">隐藏</button></div>`;
+  if (!basicTodo.length) {
+    const title = advancedTodo.length ? "基础配置已完成" : "上手清单已完成";
+    const detail = advancedTodo.length ? `进阶 ${advanced.length - advancedTodo.length} / ${advanced.length}，下面这些按需配置` : "基础和进阶都配好了，需要时点左侧“新手引导”重新打开";
+    return `<section class="card guide-card is-compact"><span class="section-icon">${icon("trophy")}</span><div class="guide-compact-copy"><strong>${title}</strong><small>${detail}</small>${advancedTodo.length ? `<div class="guide-done">${advancedTodo.map((step) => guideChip(step, false)).join("")}</div>` : ""}</div>${actions}</section>`;
   }
+  const basicDone = basic.filter((step) => step.done());
   return `<section class="card guide-card">
-    ${sectionHead("新手上手清单", `已完成 ${done.length} / ${tracked.length} 项，按顺序配置最省事`, "trophy", actions)}
-    <div class="guide-progress" aria-hidden="true"><i style="width:${done.length / tracked.length * 100}%"></i></div>
-    <div class="guide-steps">${todo.map((step) => `<button class="guide-step" data-guide-step="${step.id}" type="button"><span class="guide-step-icon">${icon(step.icon)}</span><span class="guide-step-copy"><strong>${esc(step.title)}</strong><small>${esc(step.action)}</small></span>${icon("arrow-right")}</button>`).join("")}</div>
-    ${done.length ? `<div class="guide-done"><span>已完成</span>${done.map((step) => `<button class="guide-done-chip" data-guide-step="${step.id}" type="button">${icon(step.icon)}${esc(step.title)}</button>`).join("")}</div>` : ""}
+    ${sectionHead("新手上手清单", `基础 ${basicDone.length} / ${basic.length} 项，按顺序配置最省事`, "trophy", actions)}
+    <div class="guide-progress" aria-hidden="true"><i style="width:${basicDone.length / basic.length * 100}%"></i></div>
+    <div class="guide-steps">${basicTodo.map(guideTile).join("")}</div>
+    ${basicDone.length ? `<div class="guide-done"><span>已完成</span>${basicDone.map((step) => guideChip(step, true)).join("")}</div>` : ""}
+    ${advanced.length ? `<div class="guide-done guide-advanced"><span>进阶（可选）</span>${advanced.map((step) => guideChip(step, step.done())).join("")}</div>` : ""}
   </section>`;
+}
+
+// 从哪一步开始：上次停在的那步已经配好（或只是说明、已经去看过）就接着下一步，没配好就还停在那步。
+function guideResumeIndex() {
+  const last = GUIDE_STEPS.findIndex((step) => step.id === guideStore(GUIDE_STORAGE.step));
+  if (last >= 0) {
+    const leftForPage = guideStore(GUIDE_STORAGE.visited) === GUIDE_STEPS[last].id;
+    const done = GUIDE_STEPS[last].done();
+    if (done === true || (done === null && leftForPage)) return Math.min(last + 1, GUIDE_STEPS.length - 1);
+    return last;
+  }
+  const firstTodo = GUIDE_STEPS.findIndex((step) => (step.level || "basic") === "basic" && step.done() === false);
+  return Math.max(0, firstTodo);
 }
 
 function openGuide(index = null) {
   guideStore(GUIDE_STORAGE.seen, "1");
-  const firstTodo = GUIDE_STEPS.findIndex((step) => step.done() === false);
-  let current = index ?? Math.max(0, firstTodo);
+  let current = index ?? guideResumeIndex();
   const returnFocus = document.activeElement;
   const close = () => {
     modalRoot.innerHTML = "";
@@ -1499,14 +1543,20 @@ function openGuide(index = null) {
   };
   const draw = () => {
     const step = GUIDE_STEPS[current];
+    const level = step.level || "basic";
+    const group = guideStepsOf(level);
     const last = current === GUIDE_STEPS.length - 1;
+    const nextStep = GUIDE_STEPS[current + 1];
+    const toAdvanced = level === "basic" && nextStep?.level === "advanced";
+    guideStore(GUIDE_STORAGE.step, step.id);
+    const dots = (items) => items.map((item) => { const i = GUIDE_STEPS.indexOf(item); return `<button class="${i === current ? "is-active" : ""} ${item.done() ? "is-done" : ""}" data-guide-jump="${i}" type="button" aria-label="第 ${i + 1} 步：${esc(item.title)}" aria-current="${i === current ? "step" : "false"}"></button>`; }).join("");
     modalRoot.innerHTML = `<div class="modal-backdrop guide-backdrop" data-guide-backdrop><section class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title">
-      <header><span>新手引导 · ${current + 1} / ${GUIDE_STEPS.length}</span><button class="modal-close" data-guide-close type="button" aria-label="关闭引导">×</button></header>
-      <nav class="guide-dots" aria-label="引导步骤">${GUIDE_STEPS.map((item, i) => `<button class="${i === current ? "is-active" : ""} ${item.done() ? "is-done" : ""}" data-guide-jump="${i}" type="button" aria-label="第 ${i + 1} 步：${esc(item.title)}" aria-current="${i === current ? "step" : "false"}"></button>`).join("")}</nav>
+      <header><span>${level === "advanced" ? "进阶（可选）" : "基础"} · ${group.indexOf(step) + 1} / ${group.length}</span><button class="modal-close" data-guide-close type="button" aria-label="关闭引导">×</button></header>
+      <nav class="guide-dots" aria-label="引导步骤"><div>${dots(guideStepsOf("basic"))}</div><div class="is-advanced">${dots(guideStepsOf("advanced"))}</div></nav>
       <div class="guide-body"><span class="guide-icon">${icon(step.icon)}</span><div class="guide-title-row"><h2 id="guide-title">${esc(step.title)}</h2>${guideStatusPill(step)}</div>${step.body.map((text) => `<p>${esc(text)}</p>`).join("")}</div>
       <footer>
-        ${step.page ? `<button class="button soft" data-guide-goto="${step.page}" type="button">${esc(step.action)}${icon("arrow-right")}</button>` : "<span></span>"}
-        <div><button class="button soft" data-guide-prev type="button" ${current === 0 ? "disabled" : ""}>上一步</button><button class="button primary" data-guide-next type="button">${last ? "完成" : "下一步"}</button></div>
+        ${step.page ? `<button class="button soft" data-guide-goto type="button">${esc(step.action)}${icon("arrow-right")}</button>` : "<span></span>"}
+        <div><button class="button soft" data-guide-prev type="button" ${current === 0 ? "disabled" : ""}>上一步</button><button class="button primary" data-guide-next type="button">${last ? "完成" : toAdvanced ? "继续看进阶" : "下一步"}</button></div>
       </footer>
     </section></div>`;
     modalRoot.querySelectorAll("[data-guide-close]").forEach((node) => node.addEventListener("click", close));
@@ -1523,6 +1573,8 @@ function openGuide(index = null) {
 
 // 基础设置的项很多，带 search 的步骤直接把搜索框填好，打开就是要填的那一组。
 function openGuideTarget(step) {
+  guideStore(GUIDE_STORAGE.step, step.id);
+  guideStore(GUIDE_STORAGE.visited, step.id);
   if (step.search && step.page === "basics") state.settingsSearch = step.search;
   if (state.currentPage === step.page) renderCurrentPage();
   else navigate(step.page);
@@ -2054,10 +2106,45 @@ function renderMemory() {
         </article>
         <article class="card memory-maintenance">${sectionHead("记忆维护", "清理超过保留周期的老化记录", "trash")}
           <p>清理不会删除仍在保留期内的记忆，也不会重置用户好感度。</p>${button("清理过期记忆", "purge-memory", "trash", "danger")}
+          ${renderMemoryCleanup()}
         </article>
       </aside>
     </section>
     ${renderConfigSection("好感度与心情", "关系温度只由真实好感度分数与配置提示词决定", ["ENABLE_AFFECTION", "ENABLE_MOOD", "AFFECTION_PROMPT_SPECIAL", "AFFECTION_PROMPT_CLOSE", "AFFECTION_PROMPT_FRIEND", "AFFECTION_PROMPT_NORMAL", "AFFECTION_PROMPT_STRANGER", "AFFECTION_PROMPT_COLD"], "heart")}`;
+}
+
+function renderMemoryCleanup() {
+  const c = state.memoryCleanup || {};
+  const r = c.result;
+  const last = c.error ? `上次清理失败：${c.error}` : r ? `${c.finished_at || ""} 上次清理：重评 ${fmt(r.evaluated)} 条，删除 ${fmt(r.removed_chat)} 条无关聊天、${fmt(r.removed_share_previews)} 条分享解析记录${r.failed ? `，${fmt(r.failed)} 条评估失败留待下次` : ""}` : "";
+  const nothing = !c.running && !num(c.pending) && !num(c.share_previews);
+  return `<div class="memory-cleanup"><strong>清理无关记忆</strong>
+    <p>${c.running ? "正在按当前评分标准逐批检查，完成后这里会显示结果。" : nothing ? "旧聊天记忆都已按当前标准检查过，没有分享解析记录需要删除。" : `按当前评分标准重新检查 ${fmt(c.pending)} 条旧聊天记忆，删掉打招呼、复读这类没用的；同时删除 ${fmt(c.share_previews)} 条分享解析记录。删掉的内容会先备份成文件。`}</p>
+    ${last ? `<small>${esc(last)}</small>` : ""}
+    <button class="button soft" data-action="cleanup-memory" type="button" ${c.running || nothing ? "disabled" : ""}>${c.running ? `<i class="dock-spinner"></i>清理中` : `${icon("trash")}清理无关记忆`}</button>
+  </div>`;
+}
+
+function watchMemoryCleanup() {
+  window.clearInterval(state.memoryCleanupTimer);
+  state.memoryCleanupTimer = window.setInterval(async () => {
+    try {
+      const status = await apiGet("memory/cleanup");
+      if (status?.running) return;
+      window.clearInterval(state.memoryCleanupTimer);
+      state.memoryCleanupTimer = null;
+      state.memoryCleanup = status || {};
+      if (state.currentPage === "memory") {
+        await refreshPageData("memory");
+        renderCurrentPage();
+      }
+      const r = status?.result;
+      if (status?.error) toast("清理失败", status.error, "error");
+      else if (r) toast("无关记忆清理完成", `删除 ${r.removed_chat} 条聊天、${r.removed_share_previews} 条分享解析记录`);
+    } catch {
+      // 读状态失败时下一轮再试；页面刷新后也能从状态接口看到结果。
+    }
+  }, 4000);
 }
 
 function renderProfile(profile) {
@@ -2530,6 +2617,24 @@ async function handleAction(action, source = null) {
     toast("清理完成", result?.removed ? `已移除 ${result.removed} 条记录` : "过期记忆已处理");
     return;
   }
+  if (action === "cleanup-memory") {
+    const c = state.memoryCleanup || {};
+    const calls = Math.ceil(num(c.pending) / 20);
+    const ok = await confirmModal("清理无关记忆", `会按当前评分标准重新检查 ${num(c.pending)} 条旧聊天记忆（约调用 ${calls} 次总结模型），删除 1-3 分的无关内容，并删除 ${num(c.share_previews)} 条分享解析记录。只删原始聊天记录，不动总结、视频记忆和好感度；删掉的内容会备份到插件数据目录。`, "开始清理", true);
+    if (!ok) return;
+    state.memoryCleanup = await apiPost("memory/cleanup", {}) || {};
+    renderCurrentPage();
+    if (state.memoryCleanup.running) {
+      toast("已开始清理", "在后台逐批检查，可以先去做别的");
+      watchMemoryCleanup();
+    } else {
+      await refreshPageData("memory");
+      renderCurrentPage();
+      const r = state.memoryCleanup.result;
+      if (r) toast("无关记忆清理完成", `删除 ${r.removed_chat} 条聊天、${r.removed_share_previews} 条分享解析记录`);
+    }
+    return;
+  }
   if (action === "logout") {
     const ok = await confirmModal("退出 B站账号", "退出后会清空插件保存的登录凭据，需要重新扫码才能继续自动互动。", "退出账号", true);
     if (!ok) return;
@@ -2821,7 +2926,7 @@ function init() {
     app.classList.remove("is-booting");
     renderCurrentPage();
     updateSaveDock();
-    if (state.mode === "host" && shouldAutoOpenGuide()) openGuide(0);
+    if (state.mode === "host" && shouldAutoOpenGuide()) openGuide();
   }).catch((error) => {
     content.innerHTML = renderErrorState("无法加载 BiliBot 控制中心", error.message || "请检查 AstrBot 页面权限");
     bindContent();

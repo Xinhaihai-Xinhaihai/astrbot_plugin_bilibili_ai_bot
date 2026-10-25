@@ -130,6 +130,8 @@ def register_webui(plugin_instance: Any, context: Context):
         ("account/qr/poll", "GET", handle_qr_poll, "Poll Bilibili login QR"),
         ("memory/stats", "GET", handle_memory_stats, "BiliBot memory statistics"),
         ("memory/purge", "POST", handle_memory_purge, "Purge aged BiliBot memories"),
+        ("memory/cleanup", "GET", handle_memory_cleanup_status, "Irrelevant memory cleanup status"),
+        ("memory/cleanup", "POST", handle_memory_cleanup_start, "Start irrelevant memory cleanup"),
         ("cache/stats", "GET", handle_cache_stats, "BiliBot cache usage"),
         ("cache/purge", "POST", handle_cache_purge, "Purge BiliBot disposable cache"),
         ("profiles", "GET", handle_get_profiles, "BiliBot relationship profiles"),
@@ -552,6 +554,50 @@ async def handle_memory_purge(plugin: Any):
         )
     except Exception as exc:
         logger.exception(f"[BiliBot WebUI] memory purge failed: {exc}")
+        return _failure(str(exc), 500)
+
+
+def _memory_cleanup_status(plugin: Any) -> dict[str, Any]:
+    task = getattr(plugin, "_memory_cleanup_task", None)
+    status = dict(getattr(plugin, "_memory_cleanup_status", None) or {})
+    status["running"] = bool(task and not task.done())
+    engine = getattr(plugin, "_consolidation", None)
+    if engine and not status["running"]:
+        status["pending"] = len(engine._cleanup_candidates())
+        status["share_previews"] = len(engine._share_preview_rpids())
+    return status
+
+
+async def _run_memory_cleanup(plugin: Any) -> None:
+    started = datetime.now().strftime("%Y-%m-%d %H:%M")
+    try:
+        result = await plugin._consolidation.cleanup_irrelevant()
+        plugin._memory_cleanup_status = {"started_at": started, "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "result": result}
+        logger.info(f"[BiliBot] 无关记忆清理完成: {result}")
+    except Exception as exc:
+        plugin._memory_cleanup_status = {"started_at": started, "error": str(exc)}
+        logger.exception(f"[BiliBot] 无关记忆清理失败: {exc}")
+
+
+async def handle_memory_cleanup_status(plugin: Any):
+    try:
+        return _response(_memory_cleanup_status(plugin))
+    except Exception as exc:
+        logger.exception(f"[BiliBot WebUI] memory cleanup status failed: {exc}")
+        return _failure(str(exc), 500)
+
+
+async def handle_memory_cleanup_start(plugin: Any):
+    try:
+        if not getattr(plugin, "_consolidation", None):
+            return _failure("记忆清算尚未初始化")
+        task = getattr(plugin, "_memory_cleanup_task", None)
+        if task and not task.done():
+            return _response(_memory_cleanup_status(plugin), "清理正在进行")
+        plugin._memory_cleanup_task = asyncio.create_task(_run_memory_cleanup(plugin))
+        return _response(_memory_cleanup_status(plugin), "已开始清理")
+    except Exception as exc:
+        logger.exception(f"[BiliBot WebUI] memory cleanup start failed: {exc}")
         return _failure(str(exc), 500)
 
 

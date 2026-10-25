@@ -667,15 +667,7 @@ class ShareMixin:
         share_record = self._remember_recent_group_share(event, info, intro)
         yield event.plain_result(self._build_share_card_text(info, intro))
 
-        share_source, share_scene = self._share_scene(event)
-        await self._save_self_memory_record(
-            f"{share_source}:{bvid}",
-            f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {share_scene}有人分享了B站视频《{info.get('title','')}》，UP:{info.get('owner_name','')}，简介:{intro[:180]}",
-            memory_type="video",
-            # 解析卡只来自标题和简介，不是观看记录；不能进入已看账本或被当成视频内容。
-            extra={"bvid": bvid, "owner_mid": str(info.get("owner_mid", "")), "owner_name": info.get("owner_name", ""), "video_title": info.get("title", ""), "tname": info.get("tname", ""), "content_analyzed": False},
-        )
-
+        # 解析只是把视频下载发出去，不算看过，也不写长期记忆；“上面那个视频”靠 share_record 的会话上下文。
         # 看不看由 Bot 自己决定，和下载发送并行；评价要等视频发出后才能引用它。
         reply_target = asyncio.get_running_loop().create_future()
         self._start_share_reaction(event, info, share_record, reply_target)
