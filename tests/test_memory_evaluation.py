@@ -74,6 +74,74 @@ class MemoryEvaluationTests(unittest.TestCase):
         self.assertEqual([m["rpid"] for m in bot._memory], ["b"])
 
 
+class _CleanupBot(_Bot):
+    def __init__(self, memories, reply):
+        super().__init__(memories, reply)
+        self._memory_write_lock = asyncio.Lock()
+        self.saved = {}
+        self.snapshots = 0
+        self.profile_refs_removed = set()
+
+    @staticmethod
+    def _is_derived_memory(record):
+        return bool(record.get("derived_from_rpids") or record.get("summary_kind"))
+
+    def _save_json(self, path, data):
+        self.saved[path] = data
+
+    async def _replace_memory_snapshot(self, assume_locked=False):
+        self.snapshots += 1
+
+    def _remove_profile_memory_refs(self, rpids):
+        self.profile_refs_removed |= set(rpids)
+
+
+class MemoryCleanupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = _load_consolidation_module()
+
+    def test_rescores_old_chats_and_drops_share_previews(self):
+        old = datetime.now() - timedelta(days=30)
+        junk = {**_chat("junk", old), "level": "recent", "importance": 7}
+        keep = {**_chat("keep", old, "用户1(甲)说：我在学日语 | Bot回复：加油"), "level": "long_term", "importance": 7}
+        summary = {**_chat("sum", old), "level": "long_term", "summary_kind": "thread", "derived_from_rpids": ["x"]}
+        today = _chat("today", datetime.now())
+        preview = {"rpid": "group_share:BV1_1", "thread_id": "group_share:BV1", "memory_type": "video",
+                   "content_analyzed": False, "text": "群聊有人分享了B站视频", "level": "recent"}
+        watched = {"rpid": "v1", "thread_id": "group_share:BV2", "memory_type": "video",
+                   "content_analyzed": True, "text": "看过", "level": "recent"}
+        bot = _CleanupBot([junk, keep, summary, today, preview, watched],
+                          json.dumps({"items": [{"rpid": "junk", "importance": 2}, {"rpid": "keep", "importance": 8}]}))
+        result = asyncio.run(self.module.ConsolidationEngine(bot).cleanup_irrelevant())
+        self.assertEqual(result, {"evaluated": 2, "removed_chat": 1, "removed_share_previews": 1, "failed": 0})
+        self.assertEqual([m["rpid"] for m in bot._memory], ["keep", "sum", "today", "v1"])
+        self.assertEqual(bot._memory[0]["importance"], 8)
+        self.assertEqual(bot._memory[0]["evaluation_version"], self.module.EVALUATION_VERSION)
+        backup = next(iter(bot.saved.values()))
+        self.assertEqual(sorted(m["rpid"] for m in backup), ["group_share:BV1_1", "junk"])
+        self.assertEqual(bot.profile_refs_removed, {"junk", "group_share:BV1_1"})
+        self.assertIn("junk", bot.prompts[0])
+        self.assertNotIn('"sum"', bot.prompts[0])
+
+    def test_already_rescored_chats_are_skipped(self):
+        old = datetime.now() - timedelta(days=30)
+        done = {**_chat("done", old), "level": "recent", "evaluation_version": self.module.EVALUATION_VERSION}
+        bot = _CleanupBot([done], "unused")
+        result = asyncio.run(self.module.ConsolidationEngine(bot).cleanup_irrelevant())
+        self.assertEqual(bot.prompts, [])
+        self.assertEqual(result["evaluated"], 0)
+        self.assertEqual(bot.saved, {})
+
+    def test_failed_batch_deletes_nothing(self):
+        old = datetime.now() - timedelta(days=30)
+        bot = _CleanupBot([{**_chat("a", old), "level": "recent"}], "not json")
+        result = asyncio.run(self.module.ConsolidationEngine(bot).cleanup_irrelevant())
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual([m["rpid"] for m in bot._memory], ["a"])
+        self.assertNotIn("evaluation_version", bot._memory[0])
+
+
 class MemoryEvaluationParserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

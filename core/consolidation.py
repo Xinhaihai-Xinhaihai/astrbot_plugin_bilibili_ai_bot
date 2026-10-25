@@ -14,6 +14,7 @@
 """
 
 import json
+import os
 from datetime import datetime, timedelta
 from astrbot.api import logger
 from .content_protocol import ContentProtocolError, parse_memory_evaluation
@@ -29,6 +30,8 @@ from .config import (
 
 # 清算在休眠开始时运行，那时已经过了零点：只认“今天”会让前一整天的记忆全部跳过评估。
 EVALUATE_WINDOW_DAYS = 3
+# 按当前评分标准评过的记忆打上版本号，手动清理时跳过，不重复花模型调用。
+EVALUATION_VERSION = 2
 
 # ── LLM 评估 Prompt ──
 
@@ -425,6 +428,7 @@ class ConsolidationEngine:
                         m["level"] = "recent"
                         m["importance"] = importance
                         m["promoted_at"] = now_str
+                        m["evaluation_version"] = EVALUATION_VERSION
                         total_promoted += 1
 
                 # 删除低分记忆
@@ -510,6 +514,86 @@ class ConsolidationEngine:
             if removed:
                 await self.bot._replace_memory_snapshot(assume_locked=True)
             return removed
+
+    # ══════════════════════════════════════
+    #  手动清理：按当前标准重评旧聊天记忆
+    # ══════════════════════════════════════
+
+    def _cleanup_candidates(self) -> list[dict]:
+        """旧版清算没评过的原始聊天记忆；总结、视频、今天待评的都不碰。"""
+        return [
+            m for m in self.bot._memory
+            if isinstance(m, dict)
+            and self.bot._match_memory_type(m, {"chat"})
+            and m.get("level") != "today"
+            and not self.bot._is_derived_memory(m)
+            and m.get("evaluation_version") != EVALUATION_VERSION
+            and m.get("rpid")
+        ]
+
+    def _share_preview_rpids(self) -> set[str]:
+        """QQ 分享解析卡：只是把视频发出去，不算看过，也不需要长期记住。"""
+        return {
+            str(m.get("rpid"))
+            for m in self.bot._memory
+            if isinstance(m, dict)
+            and m.get("memory_type") == "video"
+            and m.get("content_analyzed") is not True
+            and str(m.get("thread_id") or "").startswith(("group_share:", "private_share:"))
+            and m.get("rpid")
+        }
+
+    async def cleanup_irrelevant(self) -> dict:
+        """重评旧聊天记忆并删掉低分项，同时删掉分享解析卡；删除前先备份。
+
+        评估期间不持有写锁，避免几十次模型调用挡住实时回复写记忆；
+        最后只按 rpid 删除，删的是原始记录，不连带删依赖它的总结。
+        """
+        candidates = [dict(m) for m in self._cleanup_candidates()]
+        scores: dict[str, int] = {}
+        failed = 0
+        for i in range(0, len(candidates), CONSOLIDATION_BATCH_SIZE):
+            batch = candidates[i:i + CONSOLIDATION_BATCH_SIZE]
+            try:
+                result = await self._evaluate_batch(batch)
+            except Exception as exc:
+                logger.error(f"[BiliBot] 记忆清理评估批次失败: {exc}")
+                result = None
+            if result is None:
+                failed += len(batch)
+                continue
+            scores.update(result)
+        discard = {rpid for rpid, score in scores.items() if score <= CONSOLIDATION_DISCARD_THRESHOLD}
+
+        async with self.bot._memory_write_lock:
+            previews = self._share_preview_rpids()
+            remove = discard | previews
+            removed = [m for m in self.bot._memory if str(m.get("rpid") or "") in remove]
+            if removed:
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = os.path.join(os.path.dirname(MEMORY_FILE), f"memory_cleanup_backup_{stamp}.json")
+                self.bot._save_json(backup, removed)
+            kept = []
+            for m in self.bot._memory:
+                rpid = str(m.get("rpid") or "")
+                if rpid in remove:
+                    continue
+                if rpid in scores:
+                    m["importance"] = scores[rpid]
+                    m["evaluation_version"] = EVALUATION_VERSION
+                kept.append(m)
+            self.bot._memory = kept
+            if removed or scores:
+                await self.bot._replace_memory_snapshot(assume_locked=True)
+        if removed:
+            self.bot._remove_profile_memory_refs({str(m.get("rpid")) for m in removed})
+        removed_ids = {str(m.get("rpid")) for m in removed}
+        return {
+            "evaluated": len(scores),
+            "removed_chat": len(discard & removed_ids),
+            "removed_share_previews": len(previews & removed_ids),
+            "failed": failed,
+        }
 
     def get_stats(self) -> dict:
         """返回各级别的记忆统计。"""
