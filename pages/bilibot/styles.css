@@ -118,7 +118,7 @@ button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus
 .status-pill.violet { color: #6755bd; background: rgba(129,109,232,.11); }
 .status-pill.orange { color: #a9682f; background: rgba(231,156,83,.13); }
 
-.health-hero { position: relative; min-height: 166px; margin-bottom: 16px; padding: 25px 28px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,.9); border-radius: 29px; box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(51,69,102,.07); }
+.health-hero { position: relative; min-height: 0; margin-bottom: 16px; padding: 20px 24px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,.9); border-radius: 29px; box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(51,69,102,.07); }
 .health-hero::after { content: ""; position: absolute; width: 320px; height: 320px; right: -120px; top: -145px; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.68), transparent 70%); }
 .health-hero.is-healthy { background: linear-gradient(120deg, rgba(233,249,242,.95), rgba(244,249,255,.94) 58%, rgba(238,241,255,.9)); }
 .health-hero.has-warning { background: linear-gradient(120deg, rgba(255,245,232,.96), rgba(255,244,246,.92)); }
@@ -1357,18 +1357,23 @@ body { background: #f3f6fa; }
 .guide-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .guide-progress { height: 6px; margin-bottom: 14px; overflow: hidden; border-radius: 6px; background: rgba(83,95,122,.09); }
 .guide-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pink), var(--violet)); transition: width .3s var(--ease); }
-.guide-steps { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 9px; list-style: none; }
-.guide-step { min-width: 0; padding: 11px 12px; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 4px 10px; border-radius: 15px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--line); }
-.guide-step-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; color: #6c5bbb; background: rgba(129,109,232,.10); }
+.guide-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 9px; }
+.guide-step { min-width: 0; min-height: 58px; padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; border: 0; border-radius: 15px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--line); color: inherit; text-align: left; transition: background .2s var(--ease), transform .2s var(--ease); }
+.guide-step:hover { background: rgba(255,255,255,.9); transform: translateY(-1px); }
+.guide-step > .gicon { width: 15px; height: 15px; color: var(--subtle); }
+.guide-step-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; color: #b8702e; background: rgba(231,156,83,.13); }
 .guide-step-icon .gicon { width: 18px; height: 18px; }
-.guide-step.is-done .guide-step-icon { color: #2f8a5f; background: rgba(67,169,121,.12); }
-.guide-step strong { display: block; color: var(--text-strong); font-size: 12.5px; }
-.guide-step small { color: var(--muted); font-size: 10.5px; }
-.guide-step.is-todo small { color: #b8702e; }
-.guide-step.is-done small { color: #2f8a5f; }
-.guide-step-go { grid-column: 1 / -1; min-height: 34px; margin-top: 6px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; border: 0; border-radius: 10px; background: rgba(255,255,255,.75); color: #59657a; font-size: 11px; font-weight: 700; box-shadow: inset 0 0 0 1px var(--line); }
-.guide-step-go .gicon { width: 14px; height: 14px; }
-.guide-step-go:hover { color: var(--text); }
+.guide-step-copy { min-width: 0; }
+.guide-step-copy strong { display: block; overflow: hidden; color: var(--text-strong); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.guide-step-copy small { color: var(--muted); font-size: 11px; }
+.guide-done { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.guide-done > span { margin-right: 4px; color: var(--subtle); font-size: 11px; font-weight: 750; }
+.guide-done-chip { min-height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 14px; background: rgba(67,169,121,.10); color: #2f7d58; font-size: 11px; font-weight: 700; }
+.guide-done-chip .gicon { width: 13px; height: 13px; }
+.guide-card.is-compact { padding: 12px 14px 12px 16px; display: flex; align-items: center; gap: 12px; }
+.guide-compact-copy { min-width: 0; flex: 1; }
+.guide-compact-copy strong { display: block; color: var(--text-strong); font-size: 13px; }
+.guide-compact-copy small { color: var(--muted); font-size: 11px; }
 .guide-modal { width: min(520px, 100%); max-height: calc(100vh - 44px); overflow: auto; padding: 22px 24px 20px; border: 1px solid rgba(255,255,255,.9); border-radius: 25px; background: rgba(255,255,255,.97); box-shadow: 0 30px 90px rgba(22,28,42,.28); animation: modalIn .3s var(--spring) both; }
 .guide-modal header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; font-weight: 750; }
 .guide-dots { margin: 12px 0 18px; display: flex; gap: 6px; }
@@ -1387,6 +1392,8 @@ body { background: #f3f6fa; }
   .guide-card { padding: 16px; }
   .guide-card .section-head { flex-wrap: wrap; }
   .guide-steps { grid-template-columns: 1fr; }
+  .guide-card.is-compact { flex-wrap: wrap; }
+  .guide-card.is-compact .guide-card-actions { width: 100%; }
   .guide-modal { padding: 18px 16px; }
   .guide-modal footer > div { width: 100%; }
   .guide-modal footer > div .button { flex: 1; }

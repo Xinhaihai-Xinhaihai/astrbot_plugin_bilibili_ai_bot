@@ -1463,20 +1463,21 @@ function renderGuideEntry() {
   return `<button class="nav-item guide-entry" data-open-guide type="button" title="按推荐顺序完成首次配置">${icon("trophy", "nav-icon")}<span>新手引导</span>${badge}</button>`;
 }
 
+// 清单只放能打勾的步骤：没完成的给可点的格子，完成的缩成小标签；全部完成就只剩一行，不占总览的地方。
 function renderGuideCard() {
   if (guideStore(GUIDE_STORAGE.dismissed) === "1") return "";
-  const progress = guideProgress();
-  const allDone = progress.done === progress.total;
-  const title = allDone ? "上手清单已完成" : "新手上手清单";
-  const subtitle = allDone ? "基础配置都到位了，可以隐藏这张卡片；需要时点左侧“新手引导”重新打开。" : `已完成 ${progress.done} / ${progress.total} 项，按顺序配置最省事`;
-  const actions = `<div class="guide-card-actions">${button("分步引导", "open-guide", "arrow-right", allDone ? "soft" : "primary")}${button("隐藏", "dismiss-guide", "arrow-left", "soft")}</div>`;
-  return `<section class="card guide-card ${allDone ? "is-complete" : ""}">
-    ${sectionHead(title, subtitle, "trophy", actions)}
-    <div class="guide-progress" aria-hidden="true"><i style="width:${progress.total ? progress.done / progress.total * 100 : 0}%"></i></div>
-    <ol class="guide-steps">${GUIDE_STEPS.filter((step) => step.page).map((step) => {
-      const done = step.done();
-      return `<li class="guide-step ${done ? "is-done" : done === false ? "is-todo" : ""}"><span class="guide-step-icon">${icon(done ? "trophy" : step.icon)}</span><div><strong>${esc(step.title)}</strong><small>${done === null ? "说明" : done ? "已完成" : "待完成"}</small></div><button class="guide-step-go" data-guide-step="${step.id}" type="button">${esc(step.action)}${icon("arrow-right")}</button></li>`;
-    }).join("")}</ol>
+  const tracked = GUIDE_STEPS.filter((step) => step.done() !== null);
+  const todo = tracked.filter((step) => !step.done());
+  const done = tracked.filter((step) => step.done());
+  const actions = `<div class="guide-card-actions">${button("分步引导", "open-guide", "arrow-right", todo.length ? "primary" : "soft")}<button class="button soft" data-action="dismiss-guide" type="button">隐藏</button></div>`;
+  if (!todo.length) {
+    return `<section class="card guide-card is-compact"><span class="section-icon">${icon("trophy")}</span><div class="guide-compact-copy"><strong>上手清单已完成</strong><small>${done.length} / ${tracked.length} 项都配好了，需要时点左侧“新手引导”重新打开</small></div>${actions}</section>`;
+  }
+  return `<section class="card guide-card">
+    ${sectionHead("新手上手清单", `已完成 ${done.length} / ${tracked.length} 项，按顺序配置最省事`, "trophy", actions)}
+    <div class="guide-progress" aria-hidden="true"><i style="width:${done.length / tracked.length * 100}%"></i></div>
+    <div class="guide-steps">${todo.map((step) => `<button class="guide-step" data-guide-step="${step.id}" type="button"><span class="guide-step-icon">${icon(step.icon)}</span><span class="guide-step-copy"><strong>${esc(step.title)}</strong><small>${esc(step.action)}</small></span>${icon("arrow-right")}</button>`).join("")}</div>
+    ${done.length ? `<div class="guide-done"><span>已完成</span>${done.map((step) => `<button class="guide-done-chip" data-guide-step="${step.id}" type="button">${icon(step.icon)}${esc(step.title)}</button>`).join("")}</div>` : ""}
   </section>`;
 }
 
