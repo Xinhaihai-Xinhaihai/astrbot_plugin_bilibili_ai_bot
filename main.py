@@ -20,6 +20,7 @@ from .core.auth import cookies_to_strings, generate_qrcode, make_qrcode_png, pol
 from .core.bilibili import cleanup, fetch_video, parse_bvid, send_comment
 from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
+from .core.interact import InteractState, get_my_mid, poll_once
 from .core.screenshot import compose_screenshot
 
 
@@ -36,8 +37,13 @@ class BiliWatcherPlugin(Star):
         self.context = context
         self.cfg = config
         self._store: CooldownStore | None = None
+        self._interact: InteractState | None = None
         self._qr: dict[str, dict] = {}
         self._lock = asyncio.Lock()
+        self._loop_task: asyncio.Task | None = None
+        self._loop_stop = False
+        self._dm_cursor = 0
+        self._device_id = ""
         self._reload_runtime()
 
     # ================= 配置 =================
@@ -54,9 +60,144 @@ class BiliWatcherPlugin(Star):
             data_dir = Path(StarTools.get_data_dir("astrbot_plugin_bili_watcher"))
             data_dir.mkdir(parents=True, exist_ok=True)
             self._store = CooldownStore(data_dir / "cooldown.json")
+            self._interact = InteractState(data_dir / "interact_state.json")
         except Exception as e:
             logger.warning(f"[bili_watcher] 初始化数据目录失败: {e}")
             self._store = None
+            self._interact = None
+
+    # ================= 互动轮询（后台任务） =================
+
+    async def initialize(self) -> None:
+        """插件激活时启动后台互动轮询。"""
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_stop = False
+            self._loop_task = asyncio.get_event_loop().create_task(self._interact_loop())
+
+    async def terminate(self) -> None:
+        """插件禁用/重载时停掉后台任务。"""
+        self._loop_stop = True
+        if self._loop_task and not self._loop_task.done():
+            self._loop_task.cancel()
+        self._loop_task = None
+
+    def _interact_enabled(self) -> bool:
+        if not self._c("interact_enabled", True):
+            return False
+        return bool(
+            str(self._c("sessdata", "") or "").strip()
+            and str(self._c("bili_jct", "") or "").strip()
+        )
+
+    async def _gen_interact_reply(self, item: dict) -> str:
+        """按互动场景生成一句回复（复用视觉模型提供商链，无图纯文本）。"""
+        from .commenter import _try_provider
+
+        style = str(self._c("comment_style", "") or "") or "口语、短（1-2句）、自然不油腻"
+        sys_prompt = (
+            "你在 B 站，有人跟你的账号互动了，你用这个账号的身份回一句。"
+            f"要求：{style}" + "\n"
+            "只输出回复本身，不要引号、不要解释、不要客套开场。"
+            "敏感话题（政治/时政/民族宗教）不站队、不表态，轻轻带过或岔开。"
+        )
+        scene = item.get("channel")
+        if scene == "dm":
+            header = "【场景】B站私信，一对一聊天。回复会真的发到对方私信。"
+        elif item.get("at_id"):
+            header = "【场景】B站评论区有人@了你，公开场合，回复会显示在评论区。"
+        elif int(item.get("biz") or 0) == 17:
+            header = "【场景】你发的动态下面的评论，公开场合。"
+        else:
+            header = "【场景】B站评论区有人回复了你的评论，公开场合。"
+        prompt = (
+            header + "\n"
+            + f"对方：{item.get('username', '')}（uid:{item.get('mid', '')}）" + "\n"
+            + f"对方内容：{str(item.get('content', ''))[:500]}" + "\n"
+            + "请回一句。"
+        )
+        timeout = int(self._c("vision_timeout_seconds", 120) or 120)
+        main_pid = str(self._c("vision_provider_id", "") or "").strip()
+        main_model = str(self._c("vision_model", "") or "").strip()
+        fallbacks = self._c("vision_fallback_provider_ids", []) or []
+        if isinstance(fallbacks, str):
+            fallbacks = [f.strip() for f in fallbacks.replace("，", ",").split(",") if f.strip()]
+
+        r = await _try_provider(self.context, main_pid, main_model, prompt, sys_prompt, None, timeout)
+        if r:
+            return r
+        for fid in fallbacks:
+            r = await _try_provider(self.context, fid, "", prompt, sys_prompt, None, timeout)
+            if r:
+                return r
+        return await _try_provider(self.context, "", "", prompt, sys_prompt, None, timeout)
+
+    async def _interact_loop(self) -> None:
+        """后台每隔一段时间跑一次互动轮询。"""
+        import uuid as _uuid
+
+        self._device_id = str(_uuid.uuid4()).upper()
+        await asyncio.sleep(20)  # 启动后等一会儿再跑
+        last_err = 0.0
+        while not self._loop_stop:
+            try:
+                if self._interact_enabled() and self._interact is not None:
+                    sessdata = str(self._c("sessdata", "") or "").strip()
+                    bili_jct = str(self._c("bili_jct", "") or "").strip()
+                    cookies = {"SESSDATA": sessdata, "bili_jct": bili_jct}
+                    mid = await get_my_mid(cookies)
+                    if not mid:
+                        logger.warning("[bili_watcher] 互动轮询：cookie 失效（拿不到 mid）")
+                    else:
+                        state = self._interact
+                        state.data.setdefault("device_id", self._device_id)
+                        state.data.setdefault("dm_cursor", self._dm_cursor)
+                        self._dm_cursor = int(state.data.get("dm_cursor", 0))
+                        res = await poll_once(
+                            state,
+                            cookies,
+                            mid,
+                            self._gen_interact_reply,
+                            style=str(self._c("comment_style", "") or ""),
+                            daily_limit=int(self._c("interact_daily_limit", 20) or 0),
+                            per_poll_limit=int(self._c("interact_per_poll_limit", 3) or 0),
+                            dm_enabled=bool(self._c("dm_auto_reply", False)),
+                            dm_cursor=self._dm_cursor,
+                            device_id=self._device_id,
+                            dm_whitelist=self._c("dm_whitelist_mids", []),
+                        )
+                        self._dm_cursor = int(res.get("dm_cursor", self._dm_cursor))
+                        state.data["dm_cursor"] = self._dm_cursor
+                        state.save()
+                        if res.get("replies"):
+                            # 有回复就推送到配置群给哥哥看
+                            groups = self._c("notify_groups", [])
+                            if isinstance(groups, str):
+                                groups = [g.strip() for g in groups.replace("，", ",").split(",") if g.strip()]
+                            lines = []
+                            for r in res["replies"]:
+                                tag = {"dm": "私信", "comment": "评论"}.get(r["channel"], r["channel"])
+                                lines.append(f"[{tag}] 回 {r['username']}：{r['text']}")
+                            msg = "B站互动自动回复了：" + "\n".join(lines)
+                            for gid in groups:
+                                if not str(gid).isdigit():
+                                    continue
+                                try:
+                                    await self.context.send_message(
+                                        f"default:GroupMessage:{gid}",
+                                        MessageChain().message(msg),
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"[bili_watcher] 互动通知推送 {gid} 失败: {e}")
+            except Exception as e:
+                import time as _t
+
+                if _t.time() - last_err > 300:
+                    logger.warning(f"[bili_watcher] 互动轮询异常: {e}")
+                    last_err = _t.time()
+            try:
+                await asyncio.sleep(int(self._c("interact_poll_seconds", 300) or 300))
+            except asyncio.CancelledError:
+                break
 
     # ================= 工具 =================
 
@@ -254,9 +395,31 @@ class BiliWatcherPlugin(Star):
             f"回退模型：{('、'.join(str(g) for g in fb) if fb else '无')}",
             f"抽帧：{self._c('frame_count', 6)} 张，超时 {self._c('vision_timeout_seconds', 120)}s",
             f"同视频冷却：{self._c('cooldown_hours', 24)} 小时，全局间隔：{self._c('global_cooldown_minutes', 30)} 分钟",
+            f"互动自动回复：{'开' if self._c('interact_enabled', True) else '关'}（私信：{'开' if self._c('dm_auto_reply', False) else '关'}）",
+            f"互动轮询：{self._c('interact_poll_seconds', 300)}s / 每轮≤{self._c('interact_per_poll_limit', 3)} / 每日≤{self._c('interact_daily_limit', 20)}",
+            f"今日已自动回：{self._interact.today_count() if self._interact else 0} 条",
             f"推送群：{('、'.join(str(g) for g in groups) if groups else '未配置（截图只发当前会话）')}",
         ]
         yield event.plain_result("\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili互动", alias={"b站互动"})
+    async def cmd_interact(self, event: AstrMessageEvent, arg: str = ""):
+        """开关互动自动回复：bili互动 开 / bili互动 关。"""
+        a = (arg or "").strip()
+        if a in ("开", "on", "true", "1"):
+            self.cfg["interact_enabled"] = True
+        elif a in ("关", "off", "false", "0"):
+            self.cfg["interact_enabled"] = False
+        else:
+            self.cfg["interact_enabled"] = not bool(self._c("interact_enabled", True))
+        self.cfg.save_config()
+        on = bool(self._c("interact_enabled", True))
+        dm = bool(self._c("dm_auto_reply", False))
+        yield event.plain_result(
+            f"互动自动回复已{'开启' if on else '关闭'}（私信：{'开' if dm else '关'}）\n"
+            f"轮询 {self._c('interact_poll_seconds', 300)}s / 每轮≤{self._c('interact_per_poll_limit', 3)}条 / 每日≤{self._c('interact_daily_limit', 20)}条"
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili重置冷却", alias={"b站重置冷却"})

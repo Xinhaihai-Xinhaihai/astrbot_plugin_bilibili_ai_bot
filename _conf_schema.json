@@ -91,5 +91,50 @@
         "type": "string",
         "default": "",
         "hint": "和 SESSDATA 配对的 CSRF token。"
+    },
+
+    "_interact_section": {
+        "description": "=== 互动自动回复（评论/@/动态/私信） ===",
+        "type": "text",
+        "invisible": true
+    },
+    "interact_enabled": {
+        "description": "启用互动自动回复",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后台轮询：有人回复你的评论、@你、评你的动态时自动回一句。私信默认关。"
+    },
+    "interact_poll_seconds": {
+        "description": "互动轮询间隔（秒）",
+        "type": "int",
+        "default": 300,
+        "slider": {"min": 60, "max": 3600, "step": 30},
+        "hint": "多久查一次新消息。建议 300（5分钟）。太短费请求。"
+    },
+    "interact_daily_limit": {
+        "description": "每日自动回复上限（条）",
+        "type": "int",
+        "default": 20,
+        "slider": {"min": 0, "max": 200, "step": 1},
+        "hint": "一天最多自动回多少条，防刷。0=不限制（不建议）。"
+    },
+    "interact_per_poll_limit": {
+        "description": "单轮最多回复（条）",
+        "type": "int",
+        "default": 3,
+        "slider": {"min": 0, "max": 10, "step": 1},
+        "hint": "每次轮询最多回几条，剩下的留到下一轮，像真人不抢着回。"
+    },
+    "dm_auto_reply": {
+        "description": "启用 B站私信自动回复",
+        "type": "bool",
+        "default": false,
+        "hint": "有人给你发 B站私信时自动回。默认关。开了建议配 dm_whitelist_mids 只回白名单。"
+    },
+    "dm_whitelist_mids": {
+        "description": "私信回复白名单 UID",
+        "type": "list",
+        "default": [],
+        "hint": "只回这些 B站 UID 的私信（留空则回所有人，慎用）。填 B站 UID 数字，逐个添加。"
     }
 }
