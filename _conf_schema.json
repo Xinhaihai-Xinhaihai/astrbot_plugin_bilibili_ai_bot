@@ -136,5 +136,63 @@
         "type": "list",
         "default": [],
         "hint": "只回这些 B站 UID 的私信（留空则回所有人，慎用）。填 B站 UID 数字，逐个添加。"
+    },
+
+    "_proactive_section": {
+        "description": "=== 主动看片（自己挑视频看，看完评论/发动态）===",
+        "type": "text",
+        "invisible": true
+    },
+    "proactive_enabled": {
+        "description": "启用主动看片",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后 bot 每隔 N 分钟自己挑个视频下载抽帧看懂，觉得值得就发评论或动态。默认关。"
+    },
+    "proactive_poll_minutes": {
+        "description": "主动看片间隔（分钟）",
+        "type": "int",
+        "default": 90,
+        "slider": {"min": 5, "max": 1440, "step": 5},
+        "hint": "多久主动看一次。建议 90 分钟以上，太频繁像刷量。设为 0 相当于停。"
+    },
+    "proactive_video_count": {
+        "description": "每轮最多看几个视频",
+        "type": "int",
+        "default": 1,
+        "slider": {"min": 1, "max": 5, "step": 1},
+        "hint": "每轮最多完整操作（评论/动态）几个视频，达到 1 个就停，剩下的留到下一轮。"
+    },
+    "proactive_comment_min_score": {
+        "description": "评论最低分",
+        "type": "float",
+        "default": 6,
+        "slider": {"min": 1, "max": 10, "step": 0.5},
+        "hint": "视频评分达到这个分才允许发评论。调高更挑剔。"
+    },
+    "proactive_dynamic": {
+        "description": "允许发动态",
+        "type": "bool",
+        "default": true,
+        "hint": "看完觉得有话想说且没评论时，可以发一条 B 站动态。"
+    },
+    "proactive_video_cooldown_hours": {
+        "description": "同一视频冷却（小时）",
+        "type": "int",
+        "default": 48,
+        "slider": {"min": 1, "max": 720, "step": 1},
+        "hint": "同一个视频 N 小时内不再主动看/评，防重复。"
+    },
+    "proactive_keywords": {
+        "description": "主动看片口味关键词",
+        "type": "list",
+        "default": [],
+        "hint": "按这些词搜 B 站视频来挑，比如「剑网3」「原神」「科研」；留空则只逛热门池。"
+    },
+    "proactive_follow_uids": {
+        "description": "特别关注的 UP 的 UID",
+        "type": "list",
+        "default": [],
+        "hint": "优先看这些 UP 的最新投稿（需要登录态）。填 B 站 UID，逐个添加。留空则不看。"
     }
 }

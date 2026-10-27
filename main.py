@@ -22,13 +22,14 @@ from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
 from .core.interact import InteractState, get_my_mid, poll_once
 from .core.screenshot import compose_screenshot
+from .core.proactive import run_proactive_round
 
 
 @register(
     "astrbot_plugin_bili_watcher",
     "心海海",
     "B站陪看评论 — 看视频(抽帧喂视觉模型)后发一条像真人的短评，评论完截图推送到指定群。不点赞不刷量。",
-    "0.1.0",
+    "v1.7.10",
     "https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_bili_watcher",
 )
 class BiliWatcherPlugin(Star):
@@ -44,6 +45,7 @@ class BiliWatcherPlugin(Star):
         self._loop_stop = False
         self._dm_cursor = 0
         self._device_id = ""
+        self._proactive_task: asyncio.Task | None = None
         self._reload_runtime()
 
     # ================= 配置 =================
@@ -69,10 +71,12 @@ class BiliWatcherPlugin(Star):
     # ================= 互动轮询（后台任务） =================
 
     async def initialize(self) -> None:
-        """插件激活时启动后台互动轮询。"""
+        """插件激活时启动后台互动轮询 + 主动看片轮询。"""
         if self._loop_task is None or self._loop_task.done():
             self._loop_stop = False
             self._loop_task = asyncio.get_event_loop().create_task(self._interact_loop())
+        if self._proactive_task is None or self._proactive_task.done():
+            self._proactive_task = asyncio.get_event_loop().create_task(self._proactive_loop())
 
     async def terminate(self) -> None:
         """插件禁用/重载时停掉后台任务。"""
@@ -80,6 +84,9 @@ class BiliWatcherPlugin(Star):
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
         self._loop_task = None
+        if self._proactive_task and not self._proactive_task.done():
+            self._proactive_task.cancel()
+        self._proactive_task = None
 
     def _interact_enabled(self) -> bool:
         if not self._c("interact_enabled", True):
@@ -198,6 +205,63 @@ class BiliWatcherPlugin(Star):
                 await asyncio.sleep(int(self._c("interact_poll_seconds", 300) or 300))
             except asyncio.CancelledError:
                 break
+
+    # ================= 主动看片轮询（后台任务） =================
+
+    def _proactive_enabled(self) -> bool:
+        if not self._c("proactive_enabled", False):
+            return False
+        if not (str(self._c("sessdata", "") or "").strip() and str(self._c("bili_jct", "") or "").strip()):
+            return False
+        return int(self._c("proactive_poll_minutes", 0) or 0) > 0
+
+    async def _proactive_loop(self) -> None:
+        """每隔 N 分钟主动看一个视频，看完像真人那样评论/发动态。"""
+        last_err = 0.0
+        while not self._loop_stop:
+            interval = int(self._c("proactive_poll_minutes", 0) or 0) * 60
+            if interval <= 0:
+                # 配置为关/0，睡长一点再查，用户改配置后能自动续上
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    break
+                continue
+            try:
+                if self._proactive_enabled():
+                    await run_proactive_round(
+                        self.context, self.cfg,
+                        notify=self._push_groups_plain,
+                        store=self._store,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                import time as _t
+                if _t.time() - last_err > 300:
+                    logger.warning(f"[bili_watcher] 主动看片轮询异常: {e}")
+                    last_err = _t.time()
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+
+    async def _push_groups_plain(self, text: str, groups: list[str] | None = None) -> None:
+        """把一段文字推送到 notify_groups 群（主动看片通知用）。"""
+        gs = groups
+        if gs is None:
+            gs = self._c("notify_groups", [])
+        if isinstance(gs, str):
+            gs = [g.strip() for g in gs.replace("，", ",").split(",") if g.strip()]
+        gs = [str(g).strip() for g in (gs or []) if str(g).strip().isdigit()]
+        for gid in gs:
+            try:
+                await self.context.send_message(
+                    f"default:GroupMessage:{gid}",
+                    MessageChain().message(text),
+                )
+            except Exception as e:
+                logger.warning(f"[bili_watcher] 主动看片通知推送 {gid} 失败: {e}")
 
     # ================= 工具 =================
 
@@ -399,6 +463,7 @@ class BiliWatcherPlugin(Star):
             f"互动轮询：{self._c('interact_poll_seconds', 300)}s / 每轮≤{self._c('interact_per_poll_limit', 3)} / 每日≤{self._c('interact_daily_limit', 20)}",
             f"今日已自动回：{self._interact.today_count() if self._interact else 0} 条",
             f"推送群：{('、'.join(str(g) for g in groups) if groups else '未配置（截图只发当前会话）')}",
+            f"主动看片：{'开' if self._c('proactive_enabled', False) else '关'}（每 {self._c('proactive_poll_minutes', 0)} 分钟看一次）",
         ]
         yield event.plain_result("\n".join(lines))
 
@@ -419,6 +484,50 @@ class BiliWatcherPlugin(Star):
         yield event.plain_result(
             f"互动自动回复已{'开启' if on else '关闭'}（私信：{'开' if dm else '关'}）\n"
             f"轮询 {self._c('interact_poll_seconds', 300)}s / 每轮≤{self._c('interact_per_poll_limit', 3)}条 / 每日≤{self._c('interact_daily_limit', 20)}条"
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili主动", alias={"b站主动", "bili主动看片"})
+    async def cmd_proactive(self, event: AstrMessageEvent, arg: str = ""):
+        """主动看片：bili主动 开 / bili主动 关 / bili主动 90（每90分钟看一次）。"""
+        a = (arg or "").strip().lower()
+        if a in ("开", "on", "true", "1"):
+            self.cfg["proactive_enabled"] = True
+            if not int(self._c("proactive_poll_minutes", 0) or 0):
+                self.cfg["proactive_poll_minutes"] = 90
+        elif a in ("关", "off", "false", "0"):
+            self.cfg["proactive_enabled"] = False
+        elif a.isdigit() and int(a) > 0:
+            self.cfg["proactive_poll_minutes"] = int(a)
+            self.cfg["proactive_enabled"] = True
+        else:
+            self.cfg["proactive_enabled"] = not bool(self._c("proactive_enabled", False))
+        self.cfg.save_config()
+        on = bool(self._c("proactive_enabled", False))
+        mins = int(self._c("proactive_poll_minutes", 0) or 0)
+        # 手动触发一轮（立即看一次，不等下一轮）
+        if on and mins > 0 and self._proactive_task and not self._proactive_task.done():
+            try:
+                r = await run_proactive_round(
+                    self.context, self.cfg,
+                    notify=self._push_groups_plain,
+                    store=self._store,
+                )
+                if r.get("commented"):
+                    extra = f"\n\n已看：《{r.get('title', '')}》→ 发了评论"
+                elif r.get("dynamic"):
+                    extra = f"\n\n已看：《{r.get('title', '')}》→ 发了动态"
+                else:
+                    extra = f"\n\n这轮没动手（{r.get('skipped', '理由未知')}）"
+            except Exception as e:
+                logger.warning(f"[bili_watcher] 手动主动看片失败: {e}")
+                extra = f"\n\n手动触发失败：{e}"
+        else:
+            extra = ""
+        yield event.plain_result(
+            f"主动看片已{'开启' if on else '关闭'}"
+            + (f"，每 {mins} 分钟看一次" if on and mins > 0 else "")
+            + extra
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)

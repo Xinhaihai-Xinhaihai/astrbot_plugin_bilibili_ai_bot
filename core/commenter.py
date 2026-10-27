@@ -50,7 +50,16 @@ def _clean(text: str) -> str:
 
 async def _try_provider(context, provider_id: str, model: str, prompt: str, sys_prompt: str,
                         image_urls: list[str] | None, timeout: int) -> str:
-    """用指定提供商调一次，失败返回空串。"""
+    """用指定提供商调一次，失败返回空串（返回清洗后的短文本）。"""
+    r = await _try_provider_raw(context, provider_id, model, prompt, sys_prompt, image_urls, timeout)
+    if not r:
+        return ""
+    return _clean(r)
+
+
+async def _try_provider_raw(context, provider_id: str, model: str, prompt: str, sys_prompt: str,
+                            image_urls: list[str] | None, timeout: int) -> str:
+    """调提供商拿完整原始文本（不做清洗/截断），失败返回空串。"""
     try:
         from astrbot.core.provider.manager import ProviderManager  # noqa: F401
     except Exception:
@@ -89,7 +98,7 @@ async def _try_provider(context, provider_id: str, model: str, prompt: str, sys_
             model=model or None,
         )
         resp = await asyncio.wait_for(coro, timeout=timeout)
-        return _clean(getattr(resp, "completion_text", "") or "")
+        return str(getattr(resp, "completion_text", "") or "")
     except Exception as e:
         logger.warning(f"[bili_watcher] 提供商 {provider_id or '<当前>'} 调用失败: {e}")
         return ""

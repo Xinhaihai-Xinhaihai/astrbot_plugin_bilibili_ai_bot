@@ -3,7 +3,7 @@ display_name: B站陪看评论
 desc: 让 bot 看懂 B 站视频（yt-dlp 下载 + ffmpeg 抽帧喂多模态视觉模型 + 标题简介弹幕热门评论），生成一条像真人的短评并用你的登录身份发出去。不点赞、不投币、不刷量，评论频率受同视频冷却 + 全局间隔双重限制，评完自动渲染可爱风截图推送到指定群。
 short_desc: B站看视频+写评论
 help: "用法：bili评论 <BV号或视频链接>（下载抽帧→视觉模型看懂→生成评论→发出→截图推送）；bili登录 / bili确认（扫码登录，SESSDATA 只存本地）；bili状态（看登录/视觉模型/冷却）；bili重置冷却（清冷却）。视觉模型在插件配置里单独指定（vision_provider_id + vision_model），支持 vision_fallback_provider_ids 回退链，不用改 AstrBot 主模型。"
-version: v1.7.3
+version: v1.7.10
 author: 心海海
 repo: https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_bilibili_ai_bot
 category: 娱乐
