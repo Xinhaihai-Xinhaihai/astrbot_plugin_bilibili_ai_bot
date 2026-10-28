@@ -12,8 +12,9 @@ from astrbot.api import logger
 
 _TEMPLATE = Path(__file__).parent.parent / "assets" / "template.jpg"
 
-# 留白安全区
-X0, Y0, X1, Y1 = 180, 235, 880, 990
+# 留白安全区（实测新版相框：中间 x 128~864 纯白；底部人物从 y≈950 起，
+# 右下角 x>720 更早被头发挡住，所以 Y1 收到 900）
+X0, Y0, X1, Y1 = 140, 280, 860, 900
 
 # 配色（跟模板的蓝白粉呼应）
 C_TITLE = (92, 108, 148)
@@ -126,15 +127,15 @@ async def compose_screenshot(
     tw = X1 - X0
     y = Y0
 
-    f_title = _load_font(34, bold=True)
-    f_meta = _load_font(21)
-    f_body = _load_font(22)
-    f_name = _load_font(19)
-    f_sec = _load_font(20, bold=True)
-    f_link = _load_font(18)
+    f_title = _load_font(30, bold=True)
+    f_meta = _load_font(19)
+    f_body = _load_font(20)
+    f_name = _load_font(18)
+    f_sec = _load_font(19, bold=True)
+    f_link = _load_font(17)
 
-    # ---------- 封面（居中圆角） ----------
-    cover_h = int(tw * 9 / 16)
+    # ---------- 封面（居中圆角，新版相框白区矮，封面压小一点） ----------
+    cover_h = int(tw * 9 / 16 * 0.62)
     cover_img = None
     tmp = Path(tempfile.mktemp(suffix=".jpg"))
     if cover_url and await _download_image(cover_url, tmp):
@@ -171,20 +172,20 @@ async def compose_screenshot(
     y += 6
 
     # ---------- UP主 + 数据 ----------
-    draw.text((X0, y), f"UP主：{owner or '未知'}", font=f_meta, fill=C_META)
-    y += int(f_meta.size * 1.5)
+    meta_line = f"UP主：{owner or '未知'}"
     stat_line = _stat_text(stat)
     if stat_line:
-        draw.text((X0, y), stat_line, font=f_meta, fill=C_META)
-        y += int(f_meta.size * 1.5)
-    y += 10
+        meta_line += "    " + stat_line
+    draw.text((X0, y), meta_line, font=f_meta, fill=C_META)
+    y += int(f_meta.size * 1.5)
+    y += 6
 
     # ---------- 分隔虚线 ----------
     _dash(draw, X0, y, X1, y, (206, 218, 238))
     y += 16
 
     # ---------- 热门评论 ----------
-    top_comments = (top_comments or [])[:4]
+    top_comments = (top_comments or [])[:3]
     if top_comments:
         draw.text((X0, y), "♡ 热门评论", font=f_sec, fill=(214, 128, 152))
         y += int(f_sec.size * 1.7)
@@ -227,11 +228,11 @@ def _stat_text(stat: dict | None) -> str:
     if not stat:
         return ""
     parts = []
-    for key, label in (("view", "播放"), ("like", "点赞"), ("reply", "评论"), ("favorite", "收藏"), ("coin", "投币"), ("share", "分享")):
+    for key, label in (("view", "播放"), ("like", "点赞"), ("reply", "评论"), ("favorite", "收藏")):
         try:
             v = stat.get(key)
             if v is not None:
                 parts.append(f"{label} {int(v):,}")
         except Exception:
             continue
-    return "    ".join(parts)
+    return "  ".join(parts[:4])
