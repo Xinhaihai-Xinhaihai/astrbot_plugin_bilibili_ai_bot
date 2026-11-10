@@ -70,13 +70,58 @@ async def _try_provider_raw(context, provider_id: str, model: str, prompt: str, 
         mgr = getattr(context, "provider_manager", None)
         if mgr is None:
             return ""
+        # 新版 ProviderManager 用 inst_map，旧版用 insts，这里做兼容
+        inst_map = getattr(mgr, "inst_map", None) or getattr(mgr, "insts", {}) or {}
+
+        def _cfg(p, key, default=""):
+            pc = getattr(p, "provider_config", None) or {}
+            return pc.get(key, default) if isinstance(pc, dict) else default
+
+        def _match(p, pid: str, mdl: str):
+            """provider 匹配：支持完整 id、source id、model 名、source/model 组合。"""
+            full_id = str(_cfg(p, "id", ""))            # 如 hcnsec/MiMo-V2.6-Flash
+            src_id = str(_cfg(p, "provider_source_id", ""))
+            pmdl = str(_cfg(p, "model", ""))
+            pname = str(getattr(p, "name", "") or "")
+            pid = pid or ""
+            mdl = mdl or ""
+            _l = lambda s: str(s).lower()
+            # 显式 id 优先（大小写不敏感）
+            if pid and (_l(full_id) == _l(pid) or _l(pname) == _l(pid)):
+                return True
+            # 组合：配的是 source id（如 hcnsec），用 model 精确定位（大小写不敏感）
+            if _l(pid) == _l(src_id):
+                if mdl:
+                    return (_l(pmdl) == _l(mdl)
+                            or _l(f"{src_id}/{mdl}") == _l(full_id)
+                            or _l(pmdl).endswith(_l(mdl)))
+                return True
+            # pid 与 model 拼起来正好是完整 id
+            if pid and mdl and _l(f"{pid}/{mdl}") == _l(full_id):
+                return True
+            # 只按 model 匹配（极端兜底）
+            if mdl and not pid and _l(pmdl) == _l(mdl):
+                return True
+            return False
+
         if provider_id:
-            prov = mgr.insts.get(provider_id) if hasattr(mgr, "insts") else None
+            # 1) 直接按完整 id 取
+            prov = inst_map.get(provider_id)
+            # 2) 组合匹配（source id + model）
             if prov is None:
-                for p in mgr.insts.values():
-                    if getattr(p, "name", "") == provider_id or str(getattr(p, "id", "")) == provider_id:
+                for p in inst_map.values():
+                    if _match(p, provider_id, model):
                         prov = p
                         break
+            # 3) 如果配的是 source id + model，试完整 id
+            if prov is None and model and "/" not in provider_id:
+                prov = inst_map.get(f"{provider_id}/{model}")
+            # 4) 最后走 manager 接口
+            if prov is None and hasattr(mgr, "get_provider_by_id"):
+                try:
+                    prov = mgr.get_provider_by_id(provider_id)
+                except Exception:
+                    prov = None
             provider = prov
         else:
             from astrbot.core.provider.manager import ProviderType

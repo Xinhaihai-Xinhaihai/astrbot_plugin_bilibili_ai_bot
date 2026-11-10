@@ -22,14 +22,14 @@ from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
 from .core.interact import InteractState, get_my_mid, poll_once
 from .core.screenshot import compose_screenshot
-from .core.proactive import run_proactive_round
+from .core.proactive import plugin_data_dir, run_proactive_round
 
 
 @register(
     "astrbot_plugin_bili_watcher",
     "心海海",
     "B站陪看评论 — 看视频(抽帧喂视觉模型)后发一条像真人的短评，评论完截图推送到指定群。不点赞不刷量。",
-    "v1.7.10",
+    "v1.8.0",
     "https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_bili_watcher",
 )
 class BiliWatcherPlugin(Star):
@@ -59,7 +59,7 @@ class BiliWatcherPlugin(Star):
 
     def _reload_runtime(self):
         try:
-            data_dir = Path(StarTools.get_data_dir("astrbot_plugin_bili_watcher"))
+            data_dir = plugin_data_dir()
             data_dir.mkdir(parents=True, exist_ok=True)
             self._store = CooldownStore(data_dir / "cooldown.json")
             self._interact = InteractState(data_dir / "interact_state.json")
@@ -246,8 +246,8 @@ class BiliWatcherPlugin(Star):
             except asyncio.CancelledError:
                 break
 
-    async def _push_groups_plain(self, text: str, groups: list[str] | None = None) -> None:
-        """把一段文字推送到 notify_groups 群（主动看片通知用）。"""
+    async def _push_groups_plain(self, text: str, shot: str = "", groups: list[str] | None = None) -> None:
+        """把一段文字（可带截图卡片）推送到 notify_groups 群（主动看片通知用）。"""
         gs = groups
         if gs is None:
             gs = self._c("notify_groups", [])
@@ -256,9 +256,13 @@ class BiliWatcherPlugin(Star):
         gs = [str(g).strip() for g in (gs or []) if str(g).strip().isdigit()]
         for gid in gs:
             try:
+                chain = MessageChain()
+                if shot and Path(shot).exists():
+                    chain.file_image(shot)
+                chain.message(text)
                 await self.context.send_message(
                     f"default:GroupMessage:{gid}",
-                    MessageChain().message(text),
+                    chain,
                 )
             except Exception as e:
                 logger.warning(f"[bili_watcher] 主动看片通知推送 {gid} 失败: {e}")
@@ -324,7 +328,9 @@ class BiliWatcherPlugin(Star):
         async with self._lock:
             yield event.plain_result(f"正在看 {bvid}，稍等…（下载+抽帧+理解，可能要一两分钟）")
             try:
-                vc = await fetch_video(bvid, int(self._c("frame_count", 6) or 6))
+                vc = await fetch_video(bvid, int(self._c("frame_count", 6) or 6),
+                                       str(self._c("sessdata", "") or ""),
+                                       str(self._c("bili_jct", "") or ""))
             except Exception as e:
                 yield event.plain_result(f"视频信息拿不到：{e}")
                 return

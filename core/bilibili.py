@@ -48,7 +48,7 @@ def parse_bvid(raw: str) -> str | None:
     return m.group(1) if m else None
 
 
-async def fetch_video(bvid: str, frame_count: int) -> VideoContent:
+async def fetch_video(bvid: str, frame_count: int, sessdata: str = "", bili_jct: str = "") -> VideoContent:
     """获取视频信息 + 下载 + 抽帧 + 弹幕 + 热门评论。信息拿不到才抛异常，其余失败兜底。"""
     from bilibili_api import video as blv
 
@@ -77,7 +77,7 @@ async def fetch_video(bvid: str, frame_count: int) -> VideoContent:
 
     # 3) 下载 + 抽帧（失败不致命）
     try:
-        mp4 = await _download_video(bvid, work_video_dir())
+        mp4 = await _download_video(bvid, work_video_dir(), sessdata, bili_jct)
         if mp4:
             vc.video_path = str(mp4)
             vc.frames = await _extract_frames(vc.video_path, vc.duration, frame_count)
@@ -140,48 +140,121 @@ def work_video_dir() -> Path:
     return d
 
 
-async def _download_video(bvid: str, out_dir: Path) -> str | None:
-    """yt-dlp 下载低清 mp4（最多 480p），失败返回 None。"""
-    import sys
+async def _download_video(bvid: str, out_dir: Path, sessdata: str = "", bili_jct: str = "") -> str | None:
+    """用 bilibili_api 拿 CDN 直链 → aiohttp 下载视频+音频 → ffmpeg 合并 mp4。
+
+    不走 www.bilibili.com 页面（数据中心 IP 会被 412 风控），直接拉 CDN。
+    失败返回 None。
+    """
+    from bilibili_api import video as blv
+    from bilibili_api import Credential
+    import aiohttp
 
     out_dir = out_dir if out_dir else work_video_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    tpl = str(out_dir / f"{bvid}.%(ext)s")
-    base = [sys.executable, "-m", "yt_dlp", "-o", tpl,
-            "--no-playlist", "--merge-output-format", "mp4",
-            "--limit-rate", "2M",
-            "--add-header", "Referer: https://www.bilibili.com",
-            "--no-warnings"]
-    fmts = ["bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]",
-            "best[height<=480][ext=mp4]", "best[height<=480]", "best"]
-    for f in fmts:
-        cmd2 = base + ["--format", f, f"https://www.bilibili.com/video/{bvid}"]
-        logger.info(f"[bili_watcher] yt-dlp 下载 {bvid}: {f}")
+
+    cred = None
+    if sessdata or bili_jct:
+        cred = Credential(sessdata=sessdata, bili_jct=bili_jct)
+    v = blv.Video(bvid=bvid, credential=cred)
+    try:
+        d = await v.get_download_url(0)
+    except Exception as e:
+        logger.warning(f"[bili_watcher] get_download_url 失败 {bvid}: {e}")
+        return None
+
+    dash = (d or {}).get("dash") or {}
+    videos = dash.get("video") or []
+    if not videos:
+        logger.warning(f"[bili_watcher] 无 dash video {bvid}")
+        return None
+
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    hdrs = {"User-Agent": ua, "Referer": f"https://www.bilibili.com/video/{bvid}"}
+
+    # 挑 ≤480p 的最清晰视频流
+    cand = sorted(videos, key=lambda x: (abs((x.get("height") or 999) - 480), (x.get("id") or 0)))
+    picked = cand[0]
+    vurl = picked.get("baseUrl") or picked.get("base_url")
+    if not vurl:
+        logger.warning(f"[bili_watcher] 无视频直链 {bvid}")
+        return None
+
+    vpath = out_dir / f"{bvid}_v.m4s"
+    apath = out_dir / f"{bvid}_a.m4s"
+
+    async def _dl(url: str, dest: Path, timeout: int = 180) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd2,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, err = await asyncio.wait_for(proc.communicate(), timeout=180)
-            if proc.returncode == 0:
-                for ext in ("mp4", "mkv", "m4a", "webm", "flv"):
-                    p = out_dir / f"{bvid}.{ext}"
-                    if p.exists() and p.stat().st_size > 0:
-                        return str(p)
-                # 没匹配到就找 bvid 开头的文件
-                for p in out_dir.iterdir():
-                    if str(p.name).startswith(bvid) and p.suffix not in (".txt",):
-                        return str(p)
-                break
-            else:
-                logger.warning(f"[bili_watcher] yt-dlp 格式失败: {err.decode(errors='ignore')[:160]}")
-        except asyncio.TimeoutError:
-            logger.warning(f"[bili_watcher] yt-dlp 超时 {bvid}")
-            break
+            async with aiohttp.ClientSession(headers=hdrs, timeout=aiohttp.ClientTimeout(total=timeout)) as s:
+                async with s.get(url) as r:
+                    if r.status != 200:
+                        logger.warning(f"[bili_watcher] CDN {r.status} {bvid}")
+                        return False
+                    with open(dest, "wb") as f:
+                        async for chunk in r.content.iter_chunked(256 * 1024):
+                            f.write(chunk)
+            return dest.exists() and dest.stat().st_size > 0
         except Exception as e:
-            logger.warning(f"[bili_watcher] yt-dlp 异常 {bvid}: {e}")
-            break
+            logger.warning(f"[bili_watcher] CDN 下载异常 {bvid}: {e}")
+            return False
+
+    okv = await _dl(vurl, vpath)
+    # 音频（DASH 通常视频音频分离）
+    aurl = None
+    auds = dash.get("audio") or []
+    if auds:
+        aurl = auds[0].get("baseUrl") or auds[0].get("base_url")
+    oka = False
+    if aurl:
+        oka = await _dl(aurl, apath)
+
+    if not okv:
+        for p in (vpath, apath):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return None
+
+    # 合并
+    final = out_dir / f"{bvid}.mp4"
+    try:
+        import imageio_ffmpeg
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        ffmpeg = "ffmpeg"
+    cmd = [ffmpeg, "-y"]
+    if oka and apath.exists():
+        cmd += ["-i", str(vpath), "-i", str(apath), "-c:v", "copy", "-c:a", "aac", "-strict", "experimental"]
+    else:
+        cmd += ["-i", str(vpath), "-c:v", "copy"]
+    cmd += [str(final)]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        )
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except Exception as e:
+        logger.warning(f"[bili_watcher] ffmpeg 合并异常 {bvid}: {e}")
+        proc = None
+        err = b""
+    if final.exists() and final.stat().st_size > 0:
+        for p in (vpath, apath):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return str(final)
+    # 合并失败就退回纯视频流（只抽帧不需要音频）
+    if vpath.exists() and vpath.stat().st_size > 0:
+        logger.warning(f"[bili_watcher] ffmpeg 合并失败，退回视频流 {bvid}: {err.decode(errors='ignore')[:120]}")
+        for p in (apath,):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return str(vpath)
     return None
 
 

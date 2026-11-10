@@ -352,10 +352,19 @@ def _valid_comment(text: str) -> bool:
 
 # ── 主动看片日志 ──
 
+def plugin_data_dir() -> Path:
+    """插件数据目录。写死标准部署路径，避免 StarTools.get_data_dir 在会话级
+    数据隔离环境下指向 workspace 下的 data 目录，导致读不到历史日志/冷却记录。"""
+    fixed = Path("/AstrBot/data/plugin_data") / "astrbot_plugin_bili_watcher"
+    try:
+        fixed.mkdir(parents=True, exist_ok=True)
+        return fixed
+    except OSError:
+        return Path(StarTools.get_data_dir("astrbot_plugin_bili_watcher"))
+
+
 def _log_file() -> Path:
-    d = Path(StarTools.get_data_dir("astrbot_plugin_bili_watcher"))
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "proactive_log.json"
+    return plugin_data_dir() / "proactive_log.json"
 
 
 def _load_log() -> list:
@@ -411,7 +420,7 @@ async def run_proactive_round(context, cfg, notify=None, store=None) -> dict:
     result = {"commented": 0, "dynamic": 0, "skipped": "", "title": ""}
     for cand in candidates[: want * 2]:
         try:
-            vc = await fetch_video(cand.bvid, int(_cfg_get(cfg, "frame_count", 6) or 6))
+            vc = await fetch_video(cand.bvid, int(_cfg_get(cfg, "frame_count", 6) or 6), sessdata, bili_jct)
         except Exception as e:
             logger.debug(f"[bili_proactive] 取视频失败 {cand.bvid}: {e}")
             continue
@@ -479,15 +488,32 @@ async def run_proactive_round(context, cfg, notify=None, store=None) -> dict:
         result["title"] = cand.title or vc.title
         result["bvid"] = cand.bvid
 
-        # 推送通知
+        # 推送通知（渲染成截图卡片再推）
         if notify is not None and (did_comment or did_dynamic):
             src_note = {"pool": "热门", "search": "搜索", "follow": "关注"}.get(cand.source, cand.source)
             if did_comment:
                 body = f"主动刷B站看完《{cand.title}》\n[{src_note}] 评分 {score} | {partition}\n评论：{comment_text}\nhttps://www.bilibili.com/video/{cand.bvid}"
+                body_comment = comment_text
             else:
                 body = f"主动刷B站看完《{cand.title}》\n[{src_note}] 评分 {score} | {partition}\n发了动态：{dynamic_text}"
+                body_comment = dynamic_text
+            shot = ""
             try:
-                await notify(body)
+                from .screenshot import compose_screenshot
+                shot = await compose_screenshot(
+                    cover_url=vc.cover,
+                    frames=list(vc.frames),
+                    title=cand.title or vc.title,
+                    owner=vc.owner,
+                    bvid=cand.bvid,
+                    comment=body_comment,
+                    stat=vc.stat,
+                    top_comments=list(vc.top_comments),
+                )
+            except Exception as e:
+                logger.warning(f"[bili_proactive] 截图失败 {cand.bvid}: {e}")
+            try:
+                await notify(body, shot)
             except Exception as e:
                 logger.warning(f"[bili_proactive] 通知失败: {e}")
 
@@ -506,4 +532,6 @@ async def _send_dynamic(sessdata: str, bili_jct: str, text: str,
     cred = Credential(sessdata=sessdata, bili_jct=bili_jct)
     # B 站动态里贴链接，方便点进原视频
     body = text.strip()
+    if cand and getattr(cand, "bvid", ""):
+        body = body + "\nhttps://www.bilibili.com/video/" + cand.bvid
     return await dynamic.send_dynamic(text=body, credential=cred)
