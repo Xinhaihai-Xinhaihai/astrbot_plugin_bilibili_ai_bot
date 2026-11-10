@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import random
 import re
 from dataclasses import dataclass, field
@@ -44,9 +45,19 @@ _EVAL_SCHEMA_PROMPT = (
     '{"score":7.0,"score_reason":"评分理由","comment":"想发在评论区的短句或空字符串","mood":"开心|平静|无聊|感动|好笑|震撼|困惑","review":"个人感想","want_comment":false,"recommend_owner":false,"recommend_reason":"","want_dynamic":false,"dynamic_text":"","partition":"实际分区","search_keywords":["以后真能拿去B站搜索的具体词"]}\n'
     "score 是观感 1-10；want_comment 表示自己是否真想在这视频评论区留一句，"
     "为 true 时 comment 写具体内容，否则留空；大多数视频 want_comment=false。"
+    "注意：若 score≥8 或某个点特别触动你（好笑/感动/技术震撼），通常就应该 want_comment=true 并写一句真话，"
+    "不要因为“怕打扰”就全留空；但 7 分以下、只是“还行”的视频可以 false。"
     "want_dynamic 表示看完是否真有话想在自己的 B 站动态里说，大多数视频 false，"
     "为 true 时 dynamic_text 写想说的具体内容（40字内）。"
     "最多 5 个搜索词，优先作品/人物/作者/主题/技术，不要写“动漫”“游戏”这种过宽词。"
+)
+
+_COMMENT_DECIDE_PROMPT = (
+    "你在 B 站刚看完一个视频，觉得它挺不错（评分 {score}/10），你作为真实观众想留一句短评。\n"
+    "要求：口语、短（1-2句）、不油腻、不营销腔、不'感谢分享'、不'我觉得'开头，别超过50字。\n"
+    "只输出评论本身，不要引号、不要解释。\n"
+    "注意别和这些你最近评过的话撞车：{recent}\n"
+    "如果实在没有想说的，就输出：无"
 )
 
 _MIN_COMMENT_LEN = 4
@@ -228,6 +239,95 @@ async def _up_latest_video(uid: str, sessdata: str, bili_jct: str) -> Candidate 
 
 # ── 候选收集 ──
 
+def _load_taste() -> dict:
+    """自学习口味：评估时模型的 search_keywords / partition 回写，用于后续选片偏好。"""
+    p = plugin_data_dir() / "taste.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_taste(taste: dict):
+    try:
+        (plugin_data_dir() / "taste.json").write_text(
+            json.dumps(taste, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _learn_taste(taste: dict, ev: dict):
+    """把评估结果里的 search_keywords / partition 记入口味，带权重。"""
+    if not isinstance(taste, dict):
+        taste = {}
+    words = taste.setdefault("words", {})
+    parts = taste.setdefault("partitions", {})
+    for kw in (ev.get("search_keywords") or [])[:5]:
+        k = str(kw).strip().lower()
+        if not k or len(k) > 40:
+            continue
+        words[k] = int(words.get(k, 0)) + 1
+    p = str(ev.get("partition") or "").strip().lower()
+    if p and len(p) <= 30:
+        parts[p] = int(parts.get(p, 0)) + 1
+    # 只留高频词，防无限膨胀
+    for d in (words, parts):
+        if len(d) > 200:
+            for k in sorted(d, key=lambda x: d[x])[: len(d) - 200]:
+                d.pop(k, None)
+    _save_taste(taste)
+    return taste
+
+
+def _taste_hint(taste: dict, cand: Candidate) -> float:
+    """候选是否命中已学口味。命中返回正分，用作选片偏好。"""
+    if not taste:
+        return 0.0
+    words = taste.get("words") or {}
+    parts = taste.get("partitions") or {}
+    # 热门池的 title/partition 通常拿不到 detail，用 title 粗匹配
+    hay = f"{cand.title} {cand.source_detail} {cand.up_name}".lower()
+    score = 0.0
+    for k, w in (words or {}).items():
+        if k and k in hay:
+            score += min(float(w), 5.0) * 0.8
+    for p, w in (parts or {}).items():
+        if p and p in hay:
+            score += min(float(w), 5.0) * 0.5
+    return min(score, 12.0)
+
+
+def _cand_score(cand: Candidate, taste: dict) -> float:
+    """候选综合分：热度（播放量对数）+ 来源偏好 + 口味命中。
+
+    用于替代纯随机洗牌——高热度、关注 UP、命中口味的更可能被选中。
+    """
+    s = 0.0
+    view = int(cand.score_hint or 0)
+    if view > 0:
+        s += min(math.log10(max(view, 1)) / 6.0, 1.0) * 3.0  # 0~3 分，100w 播放≈1
+    # 来源偏好：特别关注 > 搜索 > 热门兜底
+    s += {"follow": 2.0, "search": 1.2, "pool": 0.6}.get(cand.source, 0.5)
+    # 口味命中（自学习）
+    s += _taste_hint(taste, cand)
+    return s
+
+
+def _pick_ordered(cands: list[Candidate], taste: dict, want: int) -> list[Candidate]:
+    """按综合分排序，加少量随机扰动（避免每次都挑同一个），取前 want。"""
+    if not cands:
+        return []
+    scored = []
+    for c in cands:
+        base = _cand_score(c, taste)
+        jitter = random.uniform(0.0, 1.2)
+        scored.append((base + jitter, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [c for _, c in scored[:want]]
+
+
 async def _collect_candidates(cfg, sessdata: str, bili_jct: str,
                               want: int) -> list[Candidate]:
     seen: set[str] = set()
@@ -262,27 +362,38 @@ async def _collect_candidates(cfg, sessdata: str, bili_jct: str,
     if len(out) < want:
         add_all(await _popular_pool(sessdata, ps=50))
 
-    random.shuffle(out)
-    return out
+    if not out:
+        return []
+
+    taste = _load_taste()
+    ordered = _pick_ordered(out, taste, want)
+    # 剩下的兜底随机（保底能凑够数量）
+    rest = [c for c in out if c not in ordered]
+    random.shuffle(rest)
+    return ordered + rest
 
 
 # ── 视觉模型评估 ──
 
-async def _evaluate(context, cfg, vc) -> dict | None:
-    """喂标题/简介/弹幕/截图给视觉模型，返回解析后的评估 dict，失败返回 None。"""
-    from .commenter import _try_provider_raw, _build_prompt  # noqa: F401
+def _recent_comments(n: int = 3) -> list[str]:
+    """取最近评过的评论文本，给模型当反例，避免重复措辞。"""
+    out: list[str] = []
+    for e in _load_log():
+        c = str(e.get("comment") or "").strip()
+        if c and c not in out:
+            out.append(c)
+        if len(out) >= n:
+            break
+    return out
 
-    timeout = int(_cfg_get(cfg, "vision_timeout_seconds", 120) or 120)
+
+async def _call_llm(context, cfg, prompt, sys_prompt, image_urls, timeout) -> str:
+    """按主→回退→当前 顺序调视觉模型，返回原始文本。"""
+    from .commenter import _try_provider_raw  # noqa: F401
+
     main_pid = str(_cfg_get(cfg, "vision_provider_id", "") or "").strip()
     main_model = str(_cfg_get(cfg, "vision_model", "") or "").strip()
     fallbacks = _as_list(_cfg_get(cfg, "vision_fallback_provider_ids", []))
-
-    prompt = _build_prompt(vc)
-    sys_prompt = (
-        "你在 B 站，刚刷到一个视频，在想要不要评论/发动态。\n"
-        + _EVAL_SCHEMA_PROMPT
-    )
-    image_urls = [str(p) for p in vc.frames] or None
 
     raw = ""
     if main_pid or main_model:
@@ -294,21 +405,90 @@ async def _evaluate(context, cfg, vc) -> dict | None:
                 break
     if not raw:
         raw = await _try_provider_raw(context, "", "", prompt, sys_prompt, image_urls, timeout)
+    return raw
+
+
+async def _evaluate(context, cfg, vc) -> dict | None:
+    """喂标题/简介/弹幕/截图给视觉模型，返回解析后的评估 dict，失败返回 None。"""
+    from .commenter import _build_prompt  # noqa: F401
+
+    timeout = int(_cfg_get(cfg, "vision_timeout_seconds", 120) or 120)
+    min_comment_score = float(_cfg_get(cfg, "proactive_comment_min_score", 6) or 6)
+
+    prompt = _build_prompt(vc)
+    sys_prompt = (
+        "你在 B 站，刚刷到一个视频，在想要不要评论/发动态。\n"
+        + _EVAL_SCHEMA_PROMPT
+    )
+    image_urls = [str(p) for p in vc.frames] or None
+
+    raw = await _call_llm(context, cfg, prompt, sys_prompt, image_urls, timeout)
     if not raw:
         return None
+    ev = _parse_eval(raw)
+    if ev is None:
+        return None
 
-    return _parse_eval(raw)
+    # 二次催评：评分达标但模型没想评时，用真实观众口吻再问一次
+    score = float(ev.get("score") or 0)
+    want_comment = bool(ev.get("want_comment"))
+    comment_text = str(ev.get("comment") or "").strip()
+    if score >= min_comment_score and not want_comment and not comment_text:
+        recent = "；".join(_recent_comments(3)) or "（还没有）"
+        cprompt = f"标题：{vc.title}\n简介：{(vc.desc or '')[:300]}\n弹幕：{' ｜ '.join(vc.danmaku[:10])}\n（附 {len(vc.frames)} 张截图）\n"
+        cprompt += f"请按真实观众身份决定要不要留一条短评。"
+        cprompt2 = _COMMENT_DECIDE_PROMPT.format(score=score, recent=recent)
+        r2 = await _call_llm(context, cfg, cprompt, cprompt2, image_urls, timeout)
+        r2 = str(r2 or "").strip().strip("\"'“”‘’")
+        if r2 and r2.lower() not in ("无", "没有", "none", "n/a", "不想", "不评", "算了"):
+            if _valid_comment(r2):
+                ev["want_comment"] = True
+                ev["comment"] = _snippet(r2, 80)
+
+    return ev
+
+
+def _snippet(text: str, limit: int = 80) -> str:
+    return str(text or "").strip()[:limit]
 
 
 def _parse_eval(raw: str) -> dict | None:
     text = str(raw or "").strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
-    # 只取第一个完整 {...}
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
+
+    def _first_balanced_obj(s: str) -> str | None:
+        """取第一个配对完整的 {...}，按嵌套深度匹配，不用贪婪正则。"""
+        start = s.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start:i + 1]
+        return None
+
+    obj = _first_balanced_obj(text)
+    if not obj:
         return None
     try:
-        d = json.loads(m.group(0))
+        d = json.loads(obj)
     except Exception:
         return None
     if not isinstance(d, dict) or "score" not in d:
@@ -444,6 +624,12 @@ async def run_proactive_round(context, cfg, notify=None, store=None) -> dict:
         if not ev:
             cleanup(vc)
             continue
+
+        # 自学习口味：把模型说的 search_keywords / partition 记下来
+        try:
+            _learn_taste(_load_taste(), ev)
+        except Exception as e:
+            logger.debug(f"[bili_proactive] 口味学习失败: {e}")
 
         did_comment = False
         did_dynamic = False
